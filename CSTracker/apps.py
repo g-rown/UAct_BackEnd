@@ -4,3 +4,6 @@ from django.apps import AppConfig
 class CstrackerConfig(AppConfig):
     default_auto_field = 'django.db.models.BigAutoField'
     name = 'CSTracker'
+
+    def ready(self):
+        import CSTracker.signals
