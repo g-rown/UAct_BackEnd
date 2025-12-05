@@ -1,5 +1,6 @@
 from django.db.models.signals import post_save, pre_save
 from django.dispatch import receiver
+from django.utils import timezone
 from .models import (
     User, StudentProfile, ServiceLog,
     ProgramSubmissions, ProgramApplication
@@ -15,18 +16,20 @@ def create_student_profile(sender, instance, created, **kwargs):
 
 
 # ----------------------------------------
-# Auto-increase hours_completed when ServiceLog is approved
+# Auto-increase hours_completed ONLY when ServiceLog is approved by admin
 # ----------------------------------------
 @receiver(post_save, sender=ServiceLog)
 def update_hours_completed(sender, instance, created, **kwargs):
-    if created and instance.approved:
+    # Only count hours when admin approves the service log
+    if instance.approved:
         student_profile = instance.student
+        # Add the number of hours from this record
         student_profile.hours_completed += instance.hours
         student_profile.save()
 
 
 # ----------------------------------------
-# Prevent duplicate ProgramSubmissions
+# Prevent duplicate ProgramSubmissions for same student + program
 # ----------------------------------------
 @receiver(pre_save, sender=ProgramSubmissions)
 def prevent_duplicate_submission(sender, instance, **kwargs):
@@ -41,12 +44,11 @@ def prevent_duplicate_submission(sender, instance, **kwargs):
 
 
 # ----------------------------------------
-# Auto-create ProgramSubmission from ProgramApplication
+# Auto-create ProgramSubmission when ProgramApplication is created
 # ----------------------------------------
 @receiver(post_save, sender=ProgramApplication)
 def create_submission_from_application(sender, instance, created, **kwargs):
     if created:
-        # Create ProgramSubmission and copy all fields from the application
         ProgramSubmissions.objects.create(
             student=instance.student,
             program=instance.program,
@@ -63,20 +65,62 @@ def create_submission_from_application(sender, instance, created, **kwargs):
 
 
 # ----------------------------------------
-# Sync ProgramSubmission status → ProgramApplication
+# Sync ProgramSubmission.status → ProgramApplication.status
 # ----------------------------------------
 @receiver(post_save, sender=ProgramSubmissions)
 def sync_submission_to_application(sender, instance, **kwargs):
     try:
-        # Find the related application
         app = ProgramApplication.objects.get(
             student=instance.student,
             program=instance.program
         )
-        # Update application status if different
         if app.status != instance.status:
             app.status = instance.status
             app.save(update_fields=['status'])
     except ProgramApplication.DoesNotExist:
-        # It's possible there is no application (ignore)
         pass
+
+
+# ----------------------------------------
+# Auto-create ServiceLog when submission is approved
+# With automatic program schedule + status
+# ----------------------------------------
+@receiver(post_save, sender=ProgramSubmissions)
+def create_service_log_on_approval(sender, instance, created, **kwargs):
+
+    if instance.status == ProgramSubmissions.APPROVED:
+
+        # Prevent duplicates
+        if ServiceLog.objects.filter(
+            student=instance.student,
+            program=instance.program
+        ).exists():
+            return
+
+        program = instance.program
+        today = timezone.now().date()
+
+        # Determine log status automatically
+        if today < program.date:
+            log_status = ServiceLog.STATUS_PENDING
+        elif today == program.date:
+            log_status = ServiceLog.STATUS_ONGOING
+        else:
+            log_status = ServiceLog.STATUS_COMPLETED
+
+        # Create ServiceLog with program date & schedule
+        ServiceLog.objects.create(
+            student=instance.student,
+            program=program,
+            course=instance.course,
+            year_level=instance.year_level,
+            section=instance.student.section or "N/A",
+            hours=program.hours,         
+            approved=False,  # Admin still approves it
+
+            # NEW FIELDS
+            program_date=program.date,
+            time_start=program.time_start,
+            time_end=program.time_end,
+            status=log_status,
+        )

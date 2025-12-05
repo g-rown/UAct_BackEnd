@@ -113,6 +113,16 @@ class ProgramSubmissions(models.Model):
 #       SERVICE LOG
 # ---------------------------
 class ServiceLog(models.Model):
+    STATUS_PENDING = "pending"
+    STATUS_ONGOING = "ongoing"
+    STATUS_COMPLETED = "completed"
+
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending"),
+        (STATUS_ONGOING, "Ongoing"),
+        (STATUS_COMPLETED, "Completed"),
+    ]
+
     student = models.ForeignKey(
         StudentProfile, on_delete=models.CASCADE, related_name="service_logs"
     )
@@ -120,12 +130,28 @@ class ServiceLog(models.Model):
         Program, on_delete=models.CASCADE, related_name="service_logs"
     )
 
+    course = models.CharField(max_length=100, default="Unknown")
+    year_level = models.CharField(max_length=10, default="N/A")
+    section = models.CharField(max_length=10, default="N/A")
+
     hours = models.IntegerField()
     date = models.DateField(auto_now_add=True)
     approved = models.BooleanField(default=False)
 
+    # NEW FIELDS
+    program_date = models.DateField(default=timezone.now)
+    time_start = models.TimeField(default=time(0, 0))
+    time_end = models.TimeField(default=time(0, 0))
+
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default=STATUS_PENDING
+    )
+
     def __str__(self):
         return f"{self.student.user.username} - {self.hours} hrs"
+
 
 
 # ---------------------------
