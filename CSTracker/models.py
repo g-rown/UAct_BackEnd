@@ -136,7 +136,6 @@ class ServiceLog(models.Model):
 
     hours = models.IntegerField()
     date = models.DateField(auto_now_add=True)
-    approved = models.BooleanField(default=False)
 
     # NEW FIELDS
     program_date = models.DateField(default=timezone.now)
@@ -148,6 +147,8 @@ class ServiceLog(models.Model):
         choices=STATUS_CHOICES,
         default=STATUS_PENDING
     )
+
+    approved = models.BooleanField(default=False)
 
     def __str__(self):
         return f"{self.student.user.username} - {self.hours} hrs"
