@@ -3,13 +3,12 @@ from rest_framework.decorators import api_view, action
 from rest_framework.response import Response
 from django.contrib.auth import authenticate
 from rest_framework.permissions import IsAuthenticated # <-- NEW IMPORT
-from rest_framework.exceptions import PermissionDenied, NotAuthenticated # <-- NEW IMPORT
 from rest_framework.authtoken.models import Token
-from rest_framework.decorators import api_view, authentication_classes
 from rest_framework.decorators import api_view, authentication_classes, permission_classes # <-- UPDATED IMPORT
 from rest_framework.permissions import AllowAny # <-- NEW IMPORT
 from rest_framework.exceptions import PermissionDenied, ValidationError # <-- CRITICAL: ValidationError MUST be imported
 from django.db import transaction
+
 
 from .models import Program, ProgramSubmissions, ServiceLog, StudentProfile, User, ProgramApplication
 from .serializers import (
@@ -18,7 +17,8 @@ from .serializers import (
     ServiceLogSerializer,
     StudentProfileSerializer,
     UserSerializer,
-    LoginSerializer
+    LoginSerializer,
+    StudentSignupSerializer
 )
 
 # ---------------------------
@@ -45,6 +45,33 @@ def login_user(request):
 
 
 # ---------------------------
+# Signup View
+# ---------------------------
+@api_view(['POST'])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def signup_student(request):
+    serializer = StudentSignupSerializer(data=request.data)
+    
+    if serializer.is_valid():
+        # This calls StudentSignupSerializer.create() and returns the new User object
+        user = serializer.save() 
+        
+        # --- Generate Token and Customize Response ---
+        token, created = Token.objects.get_or_create(user=user)
+
+        return Response({
+            "id": user.id,
+            "username": user.username,
+            "is_admin": user.is_admin,
+            "is_student": user.is_student,
+            "token": token.key, 
+            "message": "Account created successfully."
+        }, status=status.HTTP_201_CREATED)
+        
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+# ---------------------------
 # PROGRAM VIEWSET
 # ---------------------------
 class ProgramViewSet(viewsets.ModelViewSet):
@@ -61,9 +88,14 @@ class StudentProfileViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
+
+        if not user.is_authenticated:
+            return StudentProfile.objects.none()
+
         if user.is_admin:
-            return self.queryset
-        return self.queryset.filter(student__user=user)
+            return StudentProfile.objects.all()
+
+        return StudentProfile.objects.filter(user=user)
 
 
 # ---------------------------

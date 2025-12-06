@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from django.contrib.auth import authenticate
 from .models import Program, ProgramSubmissions, ServiceLog, StudentProfile, User, ProgramApplication
+from django.contrib.auth.hashers import make_password
 
 # ---------------------------
 # LOGIN SERIALIZER
@@ -101,3 +102,73 @@ class ServiceLogSerializer(serializers.ModelSerializer):
             'status', 'approved', 'application'
         ]
         read_only_fields = ['id', 'application', 'status', 'approved']
+
+
+# ---------------------------
+# 
+# ---------------------------
+class UserCreationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ('username', 'email', 'password', 'first_name', 'last_name')
+        extra_kwargs = {'password': {'write_only': True}}
+
+        def create(self, validated_data):
+            user = User.objects.create(
+                username=validated_data['username'],
+                email=validated_data['email'],
+                password=make_password(validated_data['password']),
+                first_name=validated_data['first_name'],
+                last_name=validated_data['last_name'],
+                is_student=True
+            )
+            return user
+
+
+# ---------------------------
+# 
+# ---------------------------
+class StudentSignupSerializer(serializers.Serializer):
+    username = serializers.CharField(max_length=150)
+    password = serializers.CharField(write_only=True)
+    first_name = serializers.CharField(max_length=30)
+    last_name = serializers.CharField(max_length=30)
+    email = serializers.EmailField()
+    
+    course = serializers.CharField(max_length=10)
+    year_level = serializers.CharField(max_length=10)
+    section = serializers.CharField(max_length=10) 
+    phone_number = serializers.CharField(max_length=15)
+    
+    def validate(self, data):
+        if User.objects.filter(username=data['username']).exists():
+            raise serializers.ValidationError({"username": "A user with that username already exists."})
+        return data
+    
+    def create(self, validated_data):
+        user_data = {
+            'username': validated_data['username'],
+            'password': validated_data['password'],
+            'first_name': validated_data['first_name'],
+            'last_name': validated_data['last_name'],
+            'email': validated_data['email'],
+        }
+        
+        profile_data = {
+            'year_level': validated_data['year_level'],
+            'section': validated_data['section'],
+            'phone_number': validated_data['phone_number'],
+            'course': validated_data['course'], 
+        }
+
+        user_serializer = UserCreationSerializer(data=user_data)
+        user_serializer.is_valid(raise_exception=True)
+        user = user_serializer.save()
+
+        student_profile = StudentProfile.objects.create(
+            user=user,
+            **profile_data
+        )
+        
+        return user
+    

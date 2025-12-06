@@ -35,7 +35,7 @@ class StudentProfile(models.Model):
         User, on_delete=models.CASCADE, related_name='student_profile'
     )
 
-    course = models.CharField(max_length=100)
+    course = models.CharField(max_length=10)
     year_level = models.CharField(max_length=10)
     section = models.CharField(max_length=10, blank=True)
     phone_number = models.CharField(max_length=15, blank=True)

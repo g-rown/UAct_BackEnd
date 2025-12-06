@@ -5,7 +5,8 @@ from .views import (
     ProgramViewSet,
     StudentProfileViewSet,
     ProgramApplicationViewSet,
-    ServiceLogViewSet
+    ServiceLogViewSet,
+    signup_student
 )
 
 router = DefaultRouter()
@@ -16,5 +17,7 @@ router.register('logs', ServiceLogViewSet)
 
 urlpatterns = [
     path('login/', login_user, name='login'),
+    path('register/', signup_student, name='register_student'),
     path('', include(router.urls)),
 ]
+
