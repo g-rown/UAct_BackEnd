@@ -3,7 +3,7 @@ from django.dispatch import receiver
 from django.utils import timezone
 from .models import (
     User, StudentProfile, ServiceLog,
-    ProgramSubmissions, ProgramApplication
+    ProgramSubmissions, ProgramApplication, Program
 )
 
 # ----------------------------------------
@@ -16,14 +16,12 @@ def create_student_profile(sender, instance, created, **kwargs):
 
 
 # ----------------------------------------
-# Auto-increase hours_completed ONLY when ServiceLog is approved by admin
+# Auto-increase hours_completed ONLY when ServiceLog is approved
 # ----------------------------------------
 @receiver(post_save, sender=ServiceLog)
 def update_hours_completed(sender, instance, created, **kwargs):
-    # Only count hours when admin approves the service log
     if instance.approved:
         student_profile = instance.student
-        # Add the number of hours from this record
         student_profile.hours_completed += instance.hours
         student_profile.save()
 
@@ -82,25 +80,40 @@ def sync_submission_to_application(sender, instance, **kwargs):
 
 
 # ----------------------------------------
-# Auto-create ServiceLog when submission is approved
-# With automatic program schedule + status
+# Auto-create ServiceLog + Update Program Slots when Approved
 # ----------------------------------------
 @receiver(post_save, sender=ProgramSubmissions)
 def create_service_log_on_approval(sender, instance, created, **kwargs):
 
     if instance.status == ProgramSubmissions.APPROVED:
 
-        # Prevent duplicates
+        program = instance.program
+
+        # --------------------------
+        # AUTO-INCREMENT slots_taken ONLY ONCE
+        # --------------------------
+        already_approved = ProgramSubmissions.objects.filter(
+            student=instance.student,
+            program=program,
+            status=ProgramSubmissions.APPROVED
+        ).exclude(pk=instance.pk).exists()
+
+        if not already_approved:
+            if program.slots_taken < program.slots:  # Prevent overbooking
+                program.slots_taken += 1
+                program.save(update_fields=['slots_taken'])
+
+        # --------------------------
+        # Prevent duplicate ServiceLogs
+        # --------------------------
         if ServiceLog.objects.filter(
             student=instance.student,
-            program=instance.program
+            program=program
         ).exists():
             return
 
-        program = instance.program
         today = timezone.now().date()
 
-        # Determine log status automatically
         if today < program.date:
             log_status = ServiceLog.STATUS_PENDING
         elif today == program.date:
@@ -108,17 +121,19 @@ def create_service_log_on_approval(sender, instance, created, **kwargs):
         else:
             log_status = ServiceLog.STATUS_COMPLETED
 
-        # Create ServiceLog with program date & schedule
+        # --------------------------
+        # Create the Service Log
+        # --------------------------
         ServiceLog.objects.create(
             student=instance.student,
             program=program,
+            facilitator=program.facilitator,
             course=instance.course,
             year_level=instance.year_level,
             section=instance.student.section or "N/A",
-            hours=program.hours,         
-            approved=False,  # Admin still approves it
+            hours=program.hours,
+            approved=False,
 
-            # NEW FIELDS
             program_date=program.date,
             time_start=program.time_start,
             time_end=program.time_end,

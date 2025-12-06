@@ -130,6 +130,7 @@ class ServiceLog(models.Model):
         Program, on_delete=models.CASCADE, related_name="service_logs"
     )
 
+    facilitator = models.CharField(max_length=255, default="N/A")
     course = models.CharField(max_length=100, default="Unknown")
     year_level = models.CharField(max_length=10, default="N/A")
     section = models.CharField(max_length=10, default="N/A")
