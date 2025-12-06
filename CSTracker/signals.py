@@ -1,3 +1,4 @@
+# signals.py
 from django.db.models.signals import post_save, pre_save
 from django.dispatch import receiver
 from django.utils import timezone
@@ -7,7 +8,7 @@ from .models import (
 )
 
 # ----------------------------------------
-# Auto-create StudentProfile when a User is created
+# StudentProfile Creation on User Creation
 # ----------------------------------------
 @receiver(post_save, sender=User)
 def create_student_profile(sender, instance, created, **kwargs):
@@ -16,126 +17,71 @@ def create_student_profile(sender, instance, created, **kwargs):
 
 
 # ----------------------------------------
-# Auto-increase hours_completed ONLY when ServiceLog is approved
+# Prevent Duplicate Applications
 # ----------------------------------------
-@receiver(post_save, sender=ServiceLog)
-def update_hours_completed(sender, instance, created, **kwargs):
-    if instance.approved:
-        student_profile = instance.student
-        student_profile.hours_completed += instance.hours
-        student_profile.save()
-
-
-# ----------------------------------------
-# Prevent duplicate ProgramSubmissions for same student + program
-# ----------------------------------------
-@receiver(pre_save, sender=ProgramSubmissions)
-def prevent_duplicate_submission(sender, instance, **kwargs):
-    qs = ProgramSubmissions.objects.filter(
+@receiver(pre_save, sender=ProgramApplication)
+def prevent_duplicate_application(sender, instance, **kwargs):
+    qs = ProgramApplication.objects.filter(
         student=instance.student,
         program=instance.program
     )
     if instance.pk:
         qs = qs.exclude(pk=instance.pk)
     if qs.exists():
-        raise ValueError("This student has already submitted for this program.")
+        raise ValueError("You already applied for this program.")
 
 
 # ----------------------------------------
-# Auto-create ProgramSubmission when ProgramApplication is created
+# Create ProgramSubmission and ServiceLog on Application Creation
 # ----------------------------------------
 @receiver(post_save, sender=ProgramApplication)
-def create_submission_from_application(sender, instance, created, **kwargs):
-    if created:
+def create_submission_and_log_from_application(sender, instance, created, **kwargs):
+
         ProgramSubmissions.objects.create(
-            student=instance.student,
-            program=instance.program,
-            first_name=instance.first_name,
-            last_name=instance.last_name,
-            email=instance.email,
-            phone_number=instance.phone_number,
-            course=instance.course,
-            year_level=instance.year_level,
-            emergency_contact_name=instance.emergency_contact_name,
-            emergency_contact_phone=instance.emergency_contact_phone,
-            status=instance.status,
+            application=instance,
+            status=ProgramSubmissions.PENDING
         )
 
-
-# ----------------------------------------
-# Sync ProgramSubmission.status → ProgramApplication.status
-# ----------------------------------------
-@receiver(post_save, sender=ProgramSubmissions)
-def sync_submission_to_application(sender, instance, **kwargs):
-    try:
-        app = ProgramApplication.objects.get(
-            student=instance.student,
-            program=instance.program
-        )
-        if app.status != instance.status:
-            app.status = instance.status
-            app.save(update_fields=['status'])
-    except ProgramApplication.DoesNotExist:
-        pass
-
-
-# ----------------------------------------
-# Auto-create ServiceLog + Update Program Slots when Approved
-# ----------------------------------------
-@receiver(post_save, sender=ProgramSubmissions)
-def create_service_log_on_approval(sender, instance, created, **kwargs):
-
-    if instance.status == ProgramSubmissions.APPROVED:
-
-        program = instance.program
-
-        # --------------------------
-        # AUTO-INCREMENT slots_taken ONLY ONCE
-        # --------------------------
-        already_approved = ProgramSubmissions.objects.filter(
-            student=instance.student,
-            program=program,
-            status=ProgramSubmissions.APPROVED
-        ).exclude(pk=instance.pk).exists()
-
-        if not already_approved:
-            if program.slots_taken < program.slots:  # Prevent overbooking
-                program.slots_taken += 1
-                program.save(update_fields=['slots_taken'])
-
-        # --------------------------
-        # Prevent duplicate ServiceLogs
-        # --------------------------
-        if ServiceLog.objects.filter(
-            student=instance.student,
-            program=program
-        ).exists():
-            return
-
-        today = timezone.now().date()
-
-        if today < program.date:
-            log_status = ServiceLog.STATUS_PENDING
-        elif today == program.date:
-            log_status = ServiceLog.STATUS_ONGOING
-        else:
-            log_status = ServiceLog.STATUS_COMPLETED
-
-        # --------------------------
-        # Create the Service Log
-        # --------------------------
         ServiceLog.objects.create(
-            student=instance.student,
-            program=program,
-            facilitator=program.facilitator,
-            course=instance.course,
-            year_level=instance.year_level,
-            section=instance.student.section or "N/A",
-            hours=program.hours,
-            approved=False,
-
-            program_date=program.date,
-            time_start=program.time_start,
-            time_end=program.time_end,
-            status=log_status,
+            application=instance,
+            status=ServiceLog.STATUS_PENDING,
+            approved=False
         )
+
+
+# ----------------------------------------
+# Approval Workflow (ProgramSubmissions -> ServiceLog -> Student Hours/Slots)
+# ----------------------------------------
+@receiver(post_save, sender=ProgramSubmissions)
+def update_on_approval(sender, instance, **kwargs):
+    
+    if instance.status != ProgramSubmissions.APPROVED:
+        return
+
+    application = instance.application
+    program = application.program
+    
+    log = ServiceLog.objects.filter(application=application).first()
+    
+    if not log or log.approved:
+        return 
+
+    log.approved = True
+    log.status = ServiceLog.STATUS_COMPLETED 
+    log.save(update_fields=['approved', 'status']) 
+    
+    if program.slots_taken < program.slots:
+        program.slots_taken += 1
+        program.save(update_fields=['slots_taken'])
+
+
+# ----------------------------------------
+# 4. Student Hours Update 
+# ----------------------------------------
+@receiver(post_save, sender=ServiceLog)
+def update_hours_completed(sender, instance, **kwargs):
+    if instance.approved:
+        student_profile = instance.application.student
+        
+        student_profile.hours_completed += instance.application.program.hours
+        student_profile.save(update_fields=['hours_completed'])

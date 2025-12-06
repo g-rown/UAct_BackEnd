@@ -8,6 +8,9 @@ from datetime import time
 #         USER MODEL
 # ---------------------------
 class User(AbstractUser):
+    first_name = models.CharField(max_length=30)
+    last_name = models.CharField(max_length=30)
+    email = models.EmailField(unique=True)
     is_student = models.BooleanField(default=False)
     is_admin = models.BooleanField(default=False)
 
@@ -15,6 +18,13 @@ class User(AbstractUser):
         if self.is_admin and self.is_student:
             raise ValueError("A user cannot be both admin and student.")
         super().save(*args, **kwargs)
+
+    @property
+    def full_name(self):
+        return f"{self.first_name} {self.last_name}"
+    
+    def __str__(self):
+        return self.full_name
 
 
 # ---------------------------
@@ -28,19 +38,21 @@ class StudentProfile(models.Model):
     course = models.CharField(max_length=100)
     year_level = models.CharField(max_length=10)
     section = models.CharField(max_length=10, blank=True)
-
-    email = models.EmailField(blank=True)
     phone_number = models.CharField(max_length=15, blank=True)
 
     total_required_hours = models.IntegerField(default=80)
     hours_completed = models.IntegerField(default=0)
 
-    def __str__(self):
-        return self.user.username
+    @property
+    def CYS(self):
+        return f"{self.course}{self.year_level}{self.section}"
 
     @property
     def hours_remaining(self):
         return self.total_required_hours - self.hours_completed
+    
+    def __str__(self):
+        return f"{ self.user.full_name} - {self.CYS}"
 
 
 # ---------------------------
@@ -49,7 +61,6 @@ class StudentProfile(models.Model):
 class Program(models.Model):
     name = models.CharField(max_length=255)
     description = models.TextField()
-
     location = models.CharField(max_length=255, blank=True)
     facilitator = models.CharField(max_length=255, blank=True)
 
@@ -57,18 +68,40 @@ class Program(models.Model):
     time_start = models.TimeField(default=time(0, 0))
     time_end = models.TimeField(default=time(0, 0))
 
-    hours = models.IntegerField()
+    hours = models.IntegerField() 
 
     slots = models.IntegerField()
     slots_taken = models.IntegerField(default=0)
 
-    def __str__(self):
-        return self.name
-
     @property
     def slots_remaining(self):
         return self.slots - self.slots_taken
+    
+    
+    def __str__(self):
+        return f"{self.name} - {self.slots_remaining} slots left"
 
+# ---------------------------
+#     PROGRAM APPLICATION
+# ---------------------------
+# This is the detailed application form.
+class ProgramApplication(models.Model):
+    student = models.ForeignKey(
+        StudentProfile, on_delete=models.CASCADE,
+        related_name="applications"
+    )
+    program = models.ForeignKey(
+        Program, on_delete=models.CASCADE,
+        related_name="applications"
+    )
+
+    emergency_contact_name = models.CharField(max_length=100)
+    emergency_contact_phone = models.CharField(max_length=15)
+
+    submitted_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.student.user.full_name} - {self.program.name}"
 
 # ---------------------------
 #    PROGRAM SUBMISSION
@@ -84,29 +117,15 @@ class ProgramSubmissions(models.Model):
         (REJECTED, "Rejected"),
     ]
 
-    student = models.ForeignKey(
-        StudentProfile, on_delete=models.CASCADE, related_name="submissions"
+    application = models.ForeignKey(
+        ProgramApplication, on_delete=models.CASCADE, related_name="submissions"
     )
-    program = models.ForeignKey(
-        Program, on_delete=models.CASCADE, related_name="submissions"
-    )
-
-    first_name = models.CharField(max_length=100, default="Unknown")
-    last_name = models.CharField(max_length=100 , default="Unknown")
-    email = models.EmailField(default="unknown@example.com")
-    phone_number = models.CharField(max_length=15, default="N/A")
-
-    course = models.CharField(max_length=100, default="Unknown")
-    year_level = models.CharField(max_length=10, default="N/A")
-
-    emergency_contact_name = models.CharField(max_length=100, default="Unknown")
-    emergency_contact_phone = models.CharField(max_length=15, default="N/A")
 
     status = models.CharField(max_length=50, choices=STATUS_CHOICES, default=PENDING)
-    submitted_at = models.DateTimeField(auto_now_add=True)
+    decision_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return f"{self.student.user.username} - {self.program.name}"
+        return f"{self.application.student.user.full_name} - {self.application.program.name}"
 
 
 # ---------------------------
@@ -123,25 +142,9 @@ class ServiceLog(models.Model):
         (STATUS_COMPLETED, "Completed"),
     ]
 
-    student = models.ForeignKey(
-        StudentProfile, on_delete=models.CASCADE, related_name="service_logs"
+    application = models.ForeignKey(
+        ProgramApplication, on_delete=models.CASCADE, related_name="service_logs"
     )
-    program = models.ForeignKey(
-        Program, on_delete=models.CASCADE, related_name="service_logs"
-    )
-
-    facilitator = models.CharField(max_length=255, default="N/A")
-    course = models.CharField(max_length=100, default="Unknown")
-    year_level = models.CharField(max_length=10, default="N/A")
-    section = models.CharField(max_length=10, default="N/A")
-
-    hours = models.IntegerField()
-    date = models.DateField(auto_now_add=True)
-
-    # NEW FIELDS
-    program_date = models.DateField(default=timezone.now)
-    time_start = models.TimeField(default=time(0, 0))
-    time_end = models.TimeField(default=time(0, 0))
 
     status = models.CharField(
         max_length=20,
@@ -152,43 +155,8 @@ class ServiceLog(models.Model):
     approved = models.BooleanField(default=False)
 
     def __str__(self):
-        return f"{self.student.user.username} - {self.hours} hrs"
+        return f"{self.application.student.user.username} - {self.application.program.hours} hours - {self.status}"
 
 
 
-# ---------------------------
-#     PROGRAM APPLICATION
-# ---------------------------
-# This is the detailed application form.
-class ProgramApplication(models.Model):
-    student = models.ForeignKey(
-        StudentProfile, on_delete=models.CASCADE,
-        related_name="applications"
-    )
-    program = models.ForeignKey(
-        Program, on_delete=models.CASCADE,
-        related_name="applications"
-    )
 
-    status = models.CharField(
-        max_length=50,
-        choices=ProgramSubmissions.STATUS_CHOICES,
-        default=ProgramSubmissions.PENDING
-    )
-
-    submitted_at = models.DateTimeField(auto_now_add=True)
-
-    # Application-specific info (not duplicated inside StudentProfile)
-    first_name = models.CharField(max_length=100)
-    last_name = models.CharField(max_length=100)
-    email = models.EmailField()
-    phone_number = models.CharField(max_length=15)
-
-    course = models.CharField(max_length=100)
-    year_level = models.CharField(max_length=10)
-
-    emergency_contact_name = models.CharField(max_length=100)
-    emergency_contact_phone = models.CharField(max_length=15)
-
-    def __str__(self):
-        return f"{self.student.user.username} - {self.program.name}"

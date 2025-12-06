@@ -32,17 +32,17 @@ def login_user(request):
     if serializer.is_valid():
         user = serializer.validated_data
 
-        # Generate or retrieve the token for the user
-        token, created = Token.objects.get_or_create(user=user) # <--- NEW LINE
+        token, created = Token.objects.get_or_create(user=user)
 
         return Response({
             "id": user.id,
             "username": user.username,
             "is_admin": getattr(user, "is_admin", False),
             "is_student": getattr(user, "is_student", False),
-            "token": token.key # <--- NEW LINE: Send the token to the client
+            "token": token.key 
         })
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
 
 # ---------------------------
 # PROGRAM VIEWSET
@@ -59,6 +59,12 @@ class StudentProfileViewSet(viewsets.ModelViewSet):
     queryset = StudentProfile.objects.all()
     serializer_class = StudentProfileSerializer
 
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_admin:
+            return self.queryset
+        return self.queryset.filter(student__user=user)
+
 
 # ---------------------------
 # PROGRAM APPLICATION VIEWSET (FIXED)
@@ -66,87 +72,55 @@ class StudentProfileViewSet(viewsets.ModelViewSet):
 class ProgramApplicationViewSet(viewsets.ModelViewSet):
     queryset = ProgramApplication.objects.all()
     serializer_class = ProgramApplicationSerializer
-    
-    permission_classes = [IsAuthenticated] 
 
     def perform_create(self, serializer):
-        """
-        Creates the application, links it to the student, and updates the program slots.
-        """
         try:
             student_profile = self.request.user.student_profile
         except StudentProfile.DoesNotExist:
-            raise PermissionDenied(detail="The authenticated user is not associated with a Student Profile.")
+            raise PermissionDenied("User has no associated Student Profile.")
+
+        program = serializer.validated_data['program']
+
+        if program.slots_taken >= program.slots:
+            raise ValidationError({"detail": "Program is full."})
 
         with transaction.atomic():
-            # A. Save the ProgramApplication instance
             application = serializer.save(student=student_profile)
-            
-            # B. Retrieve the linked Program object
-            program = application.program
-            
-            # C. Check for availability
-            if program.slots_taken >= program.slots:
-                # This raises a DRF exception which returns a 400 Bad Request JSON response
-                # and forces a rollback of the transaction.
-                raise ValidationError({
-                    "detail": "This program is currently full and cannot accept new applications."
-                })
-                
-            # D. Update the slots_taken count
             program.slots_taken += 1
-            
-            # E. Save the updated Program object to the database
             program.save()
 
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_admin:
+            return self.queryset
+        return self.queryset.filter(student__user=user)
 
-    # Approve a program submissions
+
+    # Approve action
     @action(detail=True, methods=['POST'])
     def approve(self, request, pk=None):
         application = self.get_object()
-        program = application.program
 
         if application.status != "pending":
-            return Response({"message": "Already processed"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"message": "Already processed"}, status=400)
 
-        # NOTE: This check should ideally be removed here as slots are taken on *creation*.
-        # However, keeping it as a redundant check for safety:
-        # if program.slots_taken >= program.slots:
-        #     return Response({"message": "No slots remaining"}, status=status.HTTP_400_BAD_REQUEST)
-
-        # Use a transaction for safety when updating multiple records
-        with transaction.atomic():
-            # Update application status
-            application.status = "approved"
-            application.save()
-
-            # The slot count was already updated during perform_create. 
-            # We don't need to increment it here again.
-            
-            # If you want to use the 'approve' action to TAKE the slot, 
-            # you must REMOVE the slot update from perform_create instead.
-            # Assuming slots are taken immediately upon application:
-            pass # No slot update needed here.
-
+        application.status = "approved"
+        application.save()
         return Response({"message": "Application approved!"})
 
-    # Reject a program application
+    # Reject action
     @action(detail=True, methods=['POST'])
     def reject(self, request, pk=None):
         application = self.get_object()
 
         if application.status != "pending":
-            return Response({"message": "Already processed"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"message": "Already processed"}, status=400)
 
-        # If you reject an application, you should free up the slot.
         with transaction.atomic():
-            program = application.program
-            
-            # Update application status
             application.status = "rejected"
             application.save()
 
-            # 🔑 NEW LOGIC: Decrement slots if the application was previously counted (i.e., status was pending/approved)
+            program = application.program
             if program.slots_taken > 0:
                 program.slots_taken -= 1
                 program.save()
@@ -161,20 +135,19 @@ class ServiceLogViewSet(viewsets.ModelViewSet):
     queryset = ServiceLog.objects.all()
     serializer_class = ServiceLogSerializer
 
-    # Approve a service log and update student hours
     @action(detail=True, methods=['POST'])
     def approve(self, request, pk=None):
         log = self.get_object()
 
         if log.approved:
-            return Response({"message": "Already approved"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"message": "Already approved"}, status=400)
 
-        log.approved = True
-        log.save()
+        with transaction.atomic():
+            log.approved = True
+            log.save()
 
-        # Add hours to student profile
-        student = log.student
-        student.hours_completed += log.hours
-        student.save()
+            student = log.application.student
+            student.hours_completed += log.application.program.hours
+            student.save()
 
         return Response({"message": "Log approved and student hours updated"})
