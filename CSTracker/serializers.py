@@ -55,10 +55,13 @@ class ProgramSerializer(serializers.ModelSerializer):
         model = Program
         fields = [
             'id', 'name', 'description', 'location', 'facilitator',
-            'date', 'time_start', 'timeEnd', 'hours',
+            'date', 'time_start', 'time_end', 'hours',
             'slots', 'slots_taken', 'slots_remaining'
         ]
         read_only_fields = ['slots_remaining', 'slots_taken']
+
+    def get_slots_remaining(self, obj):
+        return obj.slots - obj.slots_taken
 
 # ---------------------------
 # PROGRAM APPLICATION SERIALIZER
