@@ -2,14 +2,13 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import api_view, action
 from rest_framework.response import Response
 from django.contrib.auth import authenticate
-from rest_framework.permissions import IsAuthenticated # <-- NEW IMPORT
+from rest_framework.permissions import IsAuthenticated, IsAdminUser # <-- NEW IMPORT
 from rest_framework.authtoken.models import Token
 from rest_framework.decorators import api_view, authentication_classes, permission_classes # <-- UPDATED IMPORT
 from rest_framework.permissions import AllowAny # <-- NEW IMPORT
 from rest_framework.exceptions import PermissionDenied, ValidationError # <-- CRITICAL: ValidationError MUST be imported
 from django.db import transaction
-
-
+from rest_framework.authentication import TokenAuthentication
 from .models import Program, ProgramSubmissions, ServiceLog, StudentProfile, User, ProgramApplication
 from .serializers import (
     ProgramSerializer,
@@ -20,6 +19,7 @@ from .serializers import (
     LoginSerializer,
     StudentSignupSerializer
 )
+from .permissions import IsAdminOrReadOnlySelf
 
 # ---------------------------
 # LOGIN VIEW
@@ -78,6 +78,8 @@ class ProgramViewSet(viewsets.ModelViewSet):
     queryset = Program.objects.all()
     serializer_class = ProgramSerializer
 
+    authentication_classes = [TokenAuthentication] 
+    permission_classes = [IsAuthenticated]
 
 # ---------------------------
 # STUDENT PROFILE VIEWSET
@@ -85,6 +87,11 @@ class ProgramViewSet(viewsets.ModelViewSet):
 class StudentProfileViewSet(viewsets.ModelViewSet):
     queryset = StudentProfile.objects.all()
     serializer_class = StudentProfileSerializer
+
+    authentication_classes = [TokenAuthentication] 
+
+    permission_classes = [IsAuthenticated, IsAdminOrReadOnlySelf]
+
 
     def get_queryset(self):
         user = self.request.user
@@ -96,14 +103,24 @@ class StudentProfileViewSet(viewsets.ModelViewSet):
             return StudentProfile.objects.all()
 
         return StudentProfile.objects.filter(user=user)
-
-
+    
+    # VITAL FIX FOR DELETION
+    def perform_destroy(self, instance):
+        """
+        Deletes the associated User object, which cascades to delete the StudentProfile
+        and all other related records (applications, logs, etc.).
+        """
+        user_to_delete = instance.user
+        user_to_delete.delete()
 # ---------------------------
 # PROGRAM APPLICATION VIEWSET (FIXED)
 # ---------------------------
 class ProgramApplicationViewSet(viewsets.ModelViewSet):
     queryset = ProgramApplication.objects.all()
     serializer_class = ProgramApplicationSerializer
+
+    authentication_classes = [TokenAuthentication] 
+    permission_classes = [IsAuthenticated]
 
     def perform_create(self, serializer):
         try:
@@ -123,40 +140,55 @@ class ProgramApplicationViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
+
+        if not user.is_authenticated:
+            return ProgramApplication.objects.none()
+        
         if user.is_admin:
             return self.queryset
         return self.queryset.filter(student__user=user)
 
 
-    # Approve action
-    @action(detail=True, methods=['POST'])
+    @action(detail=True, methods=['POST'], permission_classes=[IsAdminUser])
     def approve(self, request, pk=None):
         application = self.get_object()
-
-        if application.status != "pending":
-            return Response({"message": "Already processed"}, status=400)
-
-        application.status = "approved"
-        application.save()
-        return Response({"message": "Application approved!"})
-
-    # Reject action
-    @action(detail=True, methods=['POST'])
-    def reject(self, request, pk=None):
-        application = self.get_object()
-
-        if application.status != "pending":
-            return Response({"message": "Already processed"}, status=400)
+        latest_submission = application.submissions.order_by('-decision_at').first()
+        if latest_submission and latest_submission.status != ProgramSubmissions.PENDING:
+            return Response({"message": f"Application is already {latest_submission.get_status_display()}"}, status=status.HTTP_400_BAD_REQUEST)
 
         with transaction.atomic():
-            application.status = "rejected"
-            application.save()
+            # Create APPROVED submission record
+            ProgramSubmissions.objects.create(
+                application=application,
+                status=ProgramSubmissions.APPROVED 
+            )
+            # Create a ServiceLog entry for tracking hours
+            ServiceLog.objects.create(
+                application=application,
+                status=ServiceLog.STATUS_PENDING
+            )
+        return Response({"message": "Application approved and Service Log created."})
 
+    @action(detail=True, methods=['POST'], permission_classes=[IsAdminUser])
+    def reject(self, request, pk=None):
+        application = self.get_object()
+        latest_submission = application.submissions.order_by('-decision_at').first()
+        if latest_submission and latest_submission.status != ProgramSubmissions.PENDING:
+            return Response({"message": f"Application is already {latest_submission.get_status_display()}"}, status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            # Create REJECTED submission record
+            ProgramSubmissions.objects.create(
+                application=application,
+                status=ProgramSubmissions.REJECTED
+            )
+
+            # Release the slot
             program = application.program
             if program.slots_taken > 0:
                 program.slots_taken -= 1
                 program.save()
-
+            
         return Response({"message": "Application rejected! Slot freed."})
 
 
@@ -166,6 +198,9 @@ class ProgramApplicationViewSet(viewsets.ModelViewSet):
 class ServiceLogViewSet(viewsets.ModelViewSet):
     queryset = ServiceLog.objects.all()
     serializer_class = ServiceLogSerializer
+
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
 
     @action(detail=True, methods=['POST'])
     def approve(self, request, pk=None):
