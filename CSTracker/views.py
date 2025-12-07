@@ -1,31 +1,26 @@
-from rest_framework import viewsets, status
-from rest_framework.decorators import api_view, action
+from rest_framework import status, viewsets, permissions
+from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
-from django.contrib.auth import authenticate
-from rest_framework.permissions import IsAuthenticated, IsAdminUser # <-- NEW IMPORT
 from rest_framework.authtoken.models import Token
-from rest_framework.decorators import api_view, authentication_classes, permission_classes # <-- UPDATED IMPORT
-from rest_framework.permissions import AllowAny # <-- NEW IMPORT
-from rest_framework.exceptions import PermissionDenied, ValidationError # <-- CRITICAL: ValidationError MUST be imported
-from django.db import transaction
-from rest_framework.authentication import TokenAuthentication
-from .models import Program, ProgramSubmissions, ServiceLog, StudentProfile, User, ProgramApplication
+from rest_framework.permissions import AllowAny, IsAuthenticated
+
+from django.db import models 
+
+# Local/App Imports
+from .permissions import IsAdminUser
+from .models import Program
 from .serializers import (
+    LoginSerializer, 
+    StudentSignupSerializer, 
     ProgramSerializer,
-    ProgramApplicationSerializer,
-    ServiceLogSerializer,
-    StudentProfileSerializer,
-    UserSerializer,
-    LoginSerializer,
-    StudentSignupSerializer
+    ProgramApplicationSerializer
 )
-from .permissions import IsAdminOrReadOnlySelf
+
 
 # ---------------------------
 # LOGIN VIEW
 # ---------------------------
 @api_view(['POST'])
-@authentication_classes([])
 @permission_classes([AllowAny])
 def login_user(request):
     serializer = LoginSerializer(data=request.data)
@@ -43,178 +38,79 @@ def login_user(request):
         })
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-
 # ---------------------------
-# Signup View
+# SIGNUP VIEW
 # ---------------------------
 @api_view(['POST'])
-@authentication_classes([])
 @permission_classes([AllowAny])
-def signup_student(request):
+def student_signup(request):
     serializer = StudentSignupSerializer(data=request.data)
     
     if serializer.is_valid():
-        # This calls StudentSignupSerializer.create() and returns the new User object
-        user = serializer.save() 
+        user = serializer.save()
         
-        # --- Generate Token and Customize Response ---
         token, created = Token.objects.get_or_create(user=user)
 
         return Response({
-            "id": user.id,
+            "message": "User registered successfully",
             "username": user.username,
-            "is_admin": user.is_admin,
-            "is_student": user.is_student,
-            "token": token.key, 
-            "message": "Account created successfully."
-        }, status=status.HTTP_201_CREATED)
+            "id": user.id,
+            "token": token.key 
+        }, status=status.HTTP_201_CREATED) 
         
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+
 # ---------------------------
-# PROGRAM VIEWSET
+# COMMUNITY PROGRAMS VIEW
 # ---------------------------
 class ProgramViewSet(viewsets.ModelViewSet):
-    queryset = Program.objects.all()
+    """
+    Provides CRUD operations for Program model.
+    Read-only for students, Full CRUD for admin users.
+    """
     serializer_class = ProgramSerializer
-
-    authentication_classes = [TokenAuthentication] 
-    permission_classes = [IsAuthenticated]
-
-# ---------------------------
-# STUDENT PROFILE VIEWSET
-# ---------------------------
-class StudentProfileViewSet(viewsets.ModelViewSet):
-    queryset = StudentProfile.objects.all()
-    serializer_class = StudentProfileSerializer
-
-    authentication_classes = [TokenAuthentication] 
-
-    permission_classes = [IsAuthenticated, IsAdminOrReadOnlySelf]
-
+    # Applies IsAuthenticated universally, and IsAdminUser for POST/PUT/DELETE
+    permission_classes = [IsAuthenticated, IsAdminUser] 
 
     def get_queryset(self):
+        """
+        Admins see all programs. Students only see programs with remaining slots.
+        """
         user = self.request.user
-
-        if not user.is_authenticated:
-            return StudentProfile.objects.none()
-
         if user.is_admin:
-            return StudentProfile.objects.all()
+            # Admin sees all programs
+            return Program.objects.all().order_by('date')
+        else:
+            # Student sees only programs with remaining slots
+            # This is the logic of your old program_list view
+            return Program.objects.filter(slots_taken__lt=models.F('slots')).order_by('date')
 
-        return StudentProfile.objects.filter(user=user)
+# ---------------------------
+# PROGRAM APPLICATION VIEW
+# ---------------------------
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def program_apply(request):
+    """
+    Handles a student submitting an application for a community program.
+    """
+    # The `context={'request': request}` is CRITICAL for the serializer to access the authenticated user.
+    serializer = ProgramApplicationSerializer(data=request.data, context={'request': request})
     
-    # VITAL FIX FOR DELETION
-    def perform_destroy(self, instance):
-        """
-        Deletes the associated User object, which cascades to delete the StudentProfile
-        and all other related records (applications, logs, etc.).
-        """
-        user_to_delete = instance.user
-        user_to_delete.delete()
-# ---------------------------
-# PROGRAM APPLICATION VIEWSET (FIXED)
-# ---------------------------
-class ProgramApplicationViewSet(viewsets.ModelViewSet):
-    queryset = ProgramApplication.objects.all()
-    serializer_class = ProgramApplicationSerializer
-
-    authentication_classes = [TokenAuthentication] 
-    permission_classes = [IsAuthenticated]
-
-    def perform_create(self, serializer):
+    if serializer.is_valid():
         try:
-            student_profile = self.request.user.student_profile
-        except StudentProfile.DoesNotExist:
-            raise PermissionDenied("User has no associated Student Profile.")
-
-        program = serializer.validated_data['program']
-
-        if program.slots_taken >= program.slots:
-            raise ValidationError({"detail": "Program is full."})
-
-        with transaction.atomic():
-            application = serializer.save(student=student_profile)
-            program.slots_taken += 1
-            program.save()
-
-    def get_queryset(self):
-        user = self.request.user
-
-        if not user.is_authenticated:
-            return ProgramApplication.objects.none()
-        
-        if user.is_admin:
-            return self.queryset
-        return self.queryset.filter(student__user=user)
-
-
-    @action(detail=True, methods=['POST'], permission_classes=[IsAdminUser])
-    def approve(self, request, pk=None):
-        application = self.get_object()
-        latest_submission = application.submissions.order_by('-decision_at').first()
-        if latest_submission and latest_submission.status != ProgramSubmissions.PENDING:
-            return Response({"message": f"Application is already {latest_submission.get_status_display()}"}, status=status.HTTP_400_BAD_REQUEST)
-
-        with transaction.atomic():
-            # Create APPROVED submission record
-            ProgramSubmissions.objects.create(
-                application=application,
-                status=ProgramSubmissions.APPROVED 
-            )
-            # Create a ServiceLog entry for tracking hours
-            ServiceLog.objects.create(
-                application=application,
-                status=ServiceLog.STATUS_PENDING
-            )
-        return Response({"message": "Application approved and Service Log created."})
-
-    @action(detail=True, methods=['POST'], permission_classes=[IsAdminUser])
-    def reject(self, request, pk=None):
-        application = self.get_object()
-        latest_submission = application.submissions.order_by('-decision_at').first()
-        if latest_submission and latest_submission.status != ProgramSubmissions.PENDING:
-            return Response({"message": f"Application is already {latest_submission.get_status_display()}"}, status=status.HTTP_400_BAD_REQUEST)
-
-        with transaction.atomic():
-            # Create REJECTED submission record
-            ProgramSubmissions.objects.create(
-                application=application,
-                status=ProgramSubmissions.REJECTED
-            )
-
-            # Release the slot
-            program = application.program
-            if program.slots_taken > 0:
-                program.slots_taken -= 1
-                program.save()
+            application = serializer.save()
             
-        return Response({"message": "Application rejected! Slot freed."})
+            return Response({
+                "message": "Application submitted successfully.",
+                "application_id": application.id
+            }, status=status.HTTP_201_CREATED)
+            
+        except Exception as e:
+            # Catch unexpected errors during save/slot increment
+            print(f"Error during application save: {e}")
+            return Response({"detail": "An internal error occurred during submission."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+             
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-
-# ---------------------------
-# SERVICE LOG VIEWSET
-# ---------------------------
-class ServiceLogViewSet(viewsets.ModelViewSet):
-    queryset = ServiceLog.objects.all()
-    serializer_class = ServiceLogSerializer
-
-    authentication_classes = [TokenAuthentication]
-    permission_classes = [IsAuthenticated]
-
-    @action(detail=True, methods=['POST'])
-    def approve(self, request, pk=None):
-        log = self.get_object()
-
-        if log.approved:
-            return Response({"message": "Already approved"}, status=400)
-
-        with transaction.atomic():
-            log.approved = True
-            log.save()
-
-            student = log.application.student
-            student.hours_completed += log.application.program.hours
-            student.save()
-
-        return Response({"message": "Log approved and student hours updated"})

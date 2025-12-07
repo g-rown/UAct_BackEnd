@@ -1,23 +1,14 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import (
-    login_user,
-    ProgramViewSet,
-    StudentProfileViewSet,
-    ProgramApplicationViewSet,
-    ServiceLogViewSet,
-    signup_student
-)
+from . import views 
 
 router = DefaultRouter()
-router.register('programs', ProgramViewSet)
-router.register('students', StudentProfileViewSet)
-router.register('applications', ProgramApplicationViewSet)
-router.register('logs', ServiceLogViewSet)
+router.register(r'programs', views.ProgramViewSet, basename='program') 
 
 urlpatterns = [
-    path('login/', login_user, name='login'),
-    path('register/', signup_student, name='register_student'),
-    path('', include(router.urls)),
+   
+    path('login/', views.login_user, name='login_user'),
+    path('signup/', views.student_signup, name='student_signup'),
+    path('applications/', views.program_apply, name='program_apply'),
+    path('', include(router.urls)), 
 ]
-

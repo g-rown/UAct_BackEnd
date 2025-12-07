@@ -1,8 +1,13 @@
 from rest_framework import serializers
 from django.contrib.auth import authenticate
-from .models import Program, ProgramSubmissions, ServiceLog, StudentProfile, User, ProgramApplication
 from django.contrib.auth.hashers import make_password
-from django.db import transaction
+
+
+from django.db import models
+
+
+from .models import User, StudentProfile, Program, ProgramApplication
+
 
 # ---------------------------
 # LOGIN SERIALIZER
@@ -11,40 +16,91 @@ class LoginSerializer(serializers.Serializer):
     username = serializers.CharField()
     password = serializers.CharField(write_only=True)
 
+
     def validate(self, data):
         user = authenticate(username=data.get('username'), password=data.get('password'))
         if user:
             return user
         raise serializers.ValidationError("Invalid Credentials")
-    
-# ---------------------------
-# USER SERIALIZER
-# ---------------------------
-class UserSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = User
-        fields = ['id', 'username', 'first_name', 'last_name', 'email', 'is_student', 'is_admin']
+
+
 
 
 # ---------------------------
-# STUDENT PROFILE SERIALIZER <--- NEWLY ADDED SERIALIZER
+# STUDENT SIGNUP SERIALIZER
 # ---------------------------
-class StudentProfileSerializer(serializers.ModelSerializer):
-    user = UserSerializer(read_only=True)
-    
-    class Meta:
-        model = StudentProfile
-        fields = [
-            'id', 'user', 'course', 'year_level', 'section', 'phone_number', 
-            'total_hours', 'is_active'
-        ]
-        read_only_fields = ['total_hours']
+class StudentSignupSerializer(serializers.Serializer):
+    first_name = serializers.CharField(max_length=30)
+    last_name = serializers.CharField(max_length=30)
+    email = serializers.EmailField()
+    username = serializers.CharField(max_length=150)
+    password = serializers.CharField(write_only=True, min_length=8)
+    course = serializers.CharField(max_length=10)
+    year_level = serializers.CharField(max_length=10)
+    section = serializers.CharField(max_length=10)
+    phone_number = serializers.CharField(max_length=15)
+
+
+    def validate_email(self, value):
+        # Check if the email is already in use
+        if User.objects.filter(email=value).exists():
+            raise serializers.ValidationError("This email is already registered.")
+        return value
+
+
+    def validate_username(self, value):
+        # Check if the username is already in use
+        if User.objects.filter(username=value).exists():
+            raise serializers.ValidationError("This username is already taken.")
+        return value
+
+
+    def create(self, validated_data):
+       
+        user_fields = [ 'username', 'password', 'first_name', 'last_name', 'email' ]
+        profile_fields = [ 'course', 'year_level', 'section', 'phone_number' ]
+        user_data = {k: validated_data.pop(k) for k in user_fields}
+        profile_data = {k: validated_data.pop(k) for k in profile_fields}
+
+
+        # 1. Create the User without password hash
+        user = User.objects.create(
+            username=user_data['username'],
+            email=user_data['email'],
+            first_name=user_data['first_name'],
+            last_name=user_data['last_name'],
+            is_student=True,
+            is_admin=False,
+        )
+        # 2. Set password and save
+        user.set_password(user_data['password'])
+        user.save()
+
+
+        # 3. Use the get/create method on the profile manager to update in one step
+        #    The 'user.studentprofile' method you used is excellent, but we can
+        #    make the update explicit.
+       
+        # Access the profile created by the signal
+        profile = user.student_profile
+       
+        # Assign and save fields in one step using the **profile_data shortcut
+        # This is slightly cleaner than the loop/setattr
+        for field, value in profile_data.items():
+            setattr(profile, field, value)
+           
+        profile.save() # Saves all changes to the profile
+
+
+        return user
+
 
 # ---------------------------
-# PROGRAM SERIALIZER
+# PROGRAMS SERIALIZER
 # ---------------------------
 class ProgramSerializer(serializers.ModelSerializer):
     slots_remaining = serializers.SerializerMethodField(read_only=True)
+
 
     class Meta:
         model = Program
@@ -55,140 +111,79 @@ class ProgramSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['slots_remaining', 'slots_taken']
 
+
+
+
     def get_slots_remaining(self, obj):
         return obj.slots - obj.slots_taken
 
-# -----------------------------------
-# PROGRAM APPLICATION SERIALIZER 
-# -----------------------------------
+
+
+
+# ---------------------------
+# PROGRAM APPLICATION SERIALIZER
+# ---------------------------
 class ProgramApplicationSerializer(serializers.ModelSerializer):
-    # Read-only nested serializers for displaying data
-    # THIS LINE NOW WORKS!
-    student = StudentProfileSerializer(read_only=True) 
-    program = ProgramSerializer(read_only=True)
+    program_id = serializers.IntegerField(write_only=True)
 
-    # Status field fetched from the related ProgramSubmissions model
-    status = serializers.SerializerMethodField(read_only=True)
-
-    # Write-only field for creating the application (required during POST)
-    program_id = serializers.PrimaryKeyRelatedField(
-        queryset=Program.objects.all(),
-        source='program',
-        write_only=True
-    )
 
     class Meta:
         model = ProgramApplication
         fields = [
-            'id', 'student', 'program', 'program_id', 
-            'emergency_contact_name', 'emergency_contact_phone', 
-            'submitted_at', 'status'
+            'id',
+            'program_id',
+            'emergency_contact_name',
+            'emergency_contact_phone',
+            'submitted_at'
         ]
-        read_only_fields = ['submitted_at', 'status']
-
-    # Method to get the status from the related ProgramSubmissions object
-    def get_status(self, obj):
-        # We assume the status is determined by the most recent ProgramSubmission
-        latest_submission = obj.submissions.order_by('-decision_at').first()
-        return latest_submission.get_status_display() if latest_submission else "No Submission Yet"
-
-
-# ---------------------------
-# SERVICE LOG SERIALIZER
-# ---------------------------
-class ServiceLogSerializer(serializers.ModelSerializer):
-    student_full_name = serializers.CharField(source='application.student.user.full_name', read_only=True)
-    program_name = serializers.CharField(source='application.program.name', read_only=True)
-    program_hours = serializers.IntegerField(source='application.program.hours', read_only=True)
-
-    class Meta:
-        model = ServiceLog
-        fields = [
-            'id', 'application', 'student_full_name', 'program_name', 'program_hours',
-            'status', 'approved',
-        ]
-        read_only_fields = ['id', 'status', 'approved']
-
-
-# ---------------------------
-# USER CREATION SERIALIZER
-# ---------------------------
-class UserCreationSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = User
-        fields = ('username', 'email', 'password', 'first_name', 'last_name')
-        extra_kwargs = {'password': {'write_only': True}}
-
+        read_only_fields = ['submitted_at', 'id']
+       
+    def validate_program_id(self, value):
+        """Check if the program exists, has slots, and the student hasn't already applied."""
+        try:
+            program = Program.objects.get(pk=value)
+        except Program.DoesNotExist:
+            raise serializers.ValidationError("Program not found.")
+           
+        if program.slots_remaining <= 0:
+            raise serializers.ValidationError("This program is fully booked.")
+           
+        # Get the authenticated user's profile from the context
+        request = self.context.get('request', None)
+        if request and request.user.is_authenticated:
+            try:
+                student_profile = request.user.student_profile
+            except StudentProfile.DoesNotExist:
+                raise serializers.ValidationError("User is not associated with a student profile.")
+               
+            # Check for duplicate application
+            if ProgramApplication.objects.filter(student=student_profile, program=program).exists():
+                raise serializers.ValidationError("You have already applied to this program.")
+           
+        return value
+       
     def create(self, validated_data):
-        user = User.objects.create(
-            username=validated_data['username'],
-            email=validated_data['email'],
-            password=make_password(validated_data['password']),
-            first_name=validated_data['first_name'],
-            last_name=validated_data['last_name'],
-            is_student=True
+        # 1. Get the authenticated student profile
+        user = self.context['request'].user
+        student_profile = user.student_profile
+           
+        # 2. Get the program object using the validated ID
+        program_id = validated_data.pop('program_id')
+        program = Program.objects.get(pk=program_id)
+       
+        # 3. Create the ProgramApplication instance
+        application = ProgramApplication.objects.create(
+            student=student_profile,
+            program=program,
+            **validated_data
         )
-        return user
+       
+        # 4. Atomically increment the slots_taken count on the Program model
+        program.slots_taken = models.F('slots_taken') + 1
+        program.save(update_fields=['slots_taken'])
+        program.refresh_from_db() # Refresh the instance to show the updated value
+       
+        return application
 
 
-# ---------------------------
-# SIGNUP SERIALIZER (REVISED)
-# ---------------------------
-class StudentSignupSerializer(serializers.Serializer):
-    username = serializers.CharField(max_length=150)
-    password = serializers.CharField(write_only=True)
-    first_name = serializers.CharField(max_length=30)
-    last_name = serializers.CharField(max_length=30)
-    email = serializers.EmailField()
 
-    course = serializers.CharField(max_length=10)
-    year_level = serializers.CharField(max_length=10)
-    section = serializers.CharField(max_length=10)
-    phone_number = serializers.CharField(max_length=15)
-
-    def validate(self, data):
-        # Prevent duplicate username
-        if User.objects.filter(username=data['username']).exists():
-            raise serializers.ValidationError({"username": "This username is already taken."})
-
-        # Prevent duplicate email
-        if User.objects.filter(email=data['email']).exists():
-            raise serializers.ValidationError({"email": "This email is already registered."})
-
-        return data
-
-    @transaction.atomic
-    def create(self, validated_data):
-
-        # STEP 1: Split validated data
-        user_data = {
-            "username": validated_data["username"],
-            "email": validated_data["email"],
-            "password": validated_data["password"],
-            "first_name": validated_data["first_name"],
-            "last_name": validated_data["last_name"],
-        }
-
-        profile_data = {
-            "course": validated_data["course"],
-            "year_level": validated_data["year_level"],
-            "section": validated_data["section"],
-            "phone_number": validated_data["phone_number"],
-        }
-
-        # STEP 2: Create User
-        user_serializer = UserCreationSerializer(data=user_data)
-        user_serializer.is_valid(raise_exception=True)
-        user = user_serializer.save()
-
-        # STEP 3: Prevent duplicate StudentProfile
-        if StudentProfile.objects.filter(user=user).exists():
-            raise serializers.ValidationError("Student profile already exists for this user")
-
-        # STEP 4: Create StudentProfile
-        StudentProfile.objects.create(
-            user=user,
-            **profile_data,
-        )
-
-        return user
