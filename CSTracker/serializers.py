@@ -194,7 +194,7 @@ class ProgramDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = Program
         # Include necessary display fields for the student's history
-        fields = ('id', 'name', 'location', 'date', 'time_start', 'time_end', 'hours')
+        fields = ('id', 'name', 'location', 'date', 'time_start', 'time_end', 'hours', 'facilitator')
 
 # CSTracker/serializers.py (Add this section)
 
@@ -212,7 +212,8 @@ class ServiceHistorySerializer(serializers.ModelSerializer):
     
     # 1. Use the SerializerMethodField to dynamically fetch the status
     current_status = serializers.SerializerMethodField()
-    
+    student_full_name = serializers.SerializerMethodField()
+
     class Meta:
         model = ProgramApplication
         # 2. Correct the 'fields' list: 
@@ -221,12 +222,19 @@ class ServiceHistorySerializer(serializers.ModelSerializer):
         fields = [
             'id', 
             'program', 
+            'current_status', 
+            'submitted_at',
             'emergency_contact_name',
             'emergency_contact_phone',
-            'current_status', # <-- Use the SerializerMethodField name
-            'submitted_at',
+            'student_full_name',
         ]
         read_only_fields = fields
+
+    def get_student_full_name(self, obj):
+        # obj is the ProgramApplication instance
+        # Access the related student profile and then the user object
+        user = obj.student.user
+        return f"{user.first_name} {user.last_name}" if user.first_name and user.last_name else user.username
 
     # 3. Define the method to fetch the latest status
     def get_current_status(self, obj):

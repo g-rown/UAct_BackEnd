@@ -5,6 +5,11 @@ from . import views
 router = DefaultRouter()
 router.register(r'programs', views.ProgramViewSet, basename='program') 
 router.register(r'students', views.StudentProfileViewSet, basename='student')
+router.register(
+    r'accreditation', 
+    views.ServiceAccreditationViewSet, 
+    basename='accreditation'
+)
 
 urlpatterns = [
    

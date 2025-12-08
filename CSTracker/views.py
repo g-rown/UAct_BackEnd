@@ -190,3 +190,35 @@ class StudentProfileViewSet(viewsets.ModelViewSet):
         else:
             # Student can only see their own profile (which should be a list of one)
             return StudentProfile.objects.filter(user=user).select_related('user')
+
+# ---------------------------
+# SERVICE ACCREDITATION/ADMIN VIEW
+# ---------------------------
+class ServiceAccreditationViewSet(viewsets.ModelViewSet):
+    """
+    Provides list of applications for Admin accreditation (approval/rejection).
+    Only Admins can access this view.
+    """
+    # ⭐️ Assuming ServiceHistorySerializer can handle all fields needed for review
+    serializer_class = ServiceHistorySerializer 
+    
+    # 🛑 Set Permissions: Only Admin users can perform these actions
+    permission_classes = [IsAuthenticated, IsAdminUser] 
+    
+    def get_queryset(self):
+        """
+        Admins/Facilitators see all program applications, possibly filtered by 'Pending' status.
+        """
+        # 1. Start with all applications
+        queryset = ProgramApplication.objects.all().select_related('program', 'student__user')
+        
+        # 2. You might want to filter only PENDING logs by default:
+        # (Assuming your ProgramApplication model has a 'status' field like 'PENDING')
+        # queryset = queryset.filter(status='PENDING') 
+        
+        # 3. Order the results
+        return queryset.order_by('-submitted_at')
+
+    # You would also add a 'perform_update' method here 
+    # to handle the approval/rejection logic.
+    # e.g., def perform_update(self, serializer): ...
