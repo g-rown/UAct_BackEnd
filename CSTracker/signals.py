@@ -61,7 +61,6 @@ def create_submission_and_log_from_application(sender, instance, created, **kwar
 # ----------------------------------------
 @receiver(post_save, sender=ProgramSubmissions)
 def update_on_submission_decision(sender, instance, created, **kwargs):
-    # Only run on update, not creation (creation status is always PENDING)
     if created:
         return
 
@@ -72,28 +71,36 @@ def update_on_submission_decision(sender, instance, created, **kwargs):
     if not log:
         return 
 
-    # 1. When the submission is APPROVED (Admin decision)
+    # --- 1. SET THE ServiceLog.submission_accepted STATUS ---
+    
     if instance.status == ProgramSubmissions.APPROVED:
-        # --- LOGIC FOR SLOTS RESERVATION (DEDUCTION) ---
-        # Atomically increment slots_taken to reserve the slot upon application approval
+        # If approved, set the submission flag to True
+        log.submission_accepted = True 
+        
+        # Atomically reserve the slot upon application approval
         if program.slots_remaining > 0:
             Program.objects.filter(pk=program.pk).update(
                 slots_taken=models.F('slots_taken') + 1
             )
-            # You might want to refresh the local program instance if needed later in the same transaction
-            # program.refresh_from_db() 
+             
+    elif instance.status == ProgramSubmissions.REJECTED:
+        # If rejected, set the submission flag to False
+        log.submission_accepted = False
         
-        # --- LOGIC FOR SERVICE LOG STATUS UPDATE ---
-        # Update ServiceLog status based on the current program date (in case date passed)
-        new_log_status = log.get_program_status()
+        # Optional: You might need logic here to release a slot if the submission was PREVIOUSLY approved
         
-        if log.status != new_log_status:
-             log.status = new_log_status
-             log.save(update_fields=['status']) 
-    
-    # 2. OPTIONAL: Logic for REJECTED submission to free a slot (if you removed the previous slot deduction)
-    # If a previous submission was approved and then rejected, you might need complex logic here
-    # to decrement slots_taken. For simplicity, we are assuming approval is the only action needed.
+    else:
+        # PENDING status (log.submission_accepted is already False by default/previous state)
+        # We don't need to save or proceed with other actions on PENDING
+        return 
+        
+    # --- 2. UPDATE ServiceLog DATE STATUS (Always run on decision) ---
+    new_log_status = log.get_program_status()
+    if log.status != new_log_status:
+        log.status = new_log_status
+
+    # Save the ServiceLog to update both the status and the new submission_accepted flag
+    log.save(update_fields=['status', 'submission_accepted'])
 
 
 # ----------------------------------------

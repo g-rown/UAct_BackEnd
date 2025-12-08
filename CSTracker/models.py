@@ -154,6 +154,7 @@ class ServiceLog(models.Model):
 
     # The admin manually approves the hours, NOT upon submission approval
     approved = models.BooleanField(default=False)
+    submission_accepted = models.BooleanField(default=False)
     
     # --- ADDED HELPER METHOD ---
     def get_program_status(self):

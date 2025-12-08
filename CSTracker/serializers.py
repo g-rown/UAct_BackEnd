@@ -223,7 +223,8 @@ class ServiceLogAccreditationSerializer(serializers.ModelSerializer):
         fields = [
             'id', 
             'status',       # The date-based status (pending/ongoing/completed)
-            'approved',     # The admin-controlled approval checkbox
+            'approved',
+            'submission_accepted',     # The admin-controlled approval checkbox
             'program',
             'student_full_name',
             'course_section',
