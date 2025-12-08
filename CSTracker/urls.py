@@ -12,5 +12,6 @@ urlpatterns = [
     path('signup/', views.student_signup, name='student_signup'),
     path('applications/', views.program_apply, name='program_apply'),
     path('service-history/', views.service_history, name='service_history'),
+    path('progress-summary/', views.student_progress_summary, name='student_progress_summary'),
     path('', include(router.urls)), 
 ]

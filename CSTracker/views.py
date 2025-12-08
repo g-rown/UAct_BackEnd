@@ -6,14 +6,18 @@ from rest_framework.response import Response
 from rest_framework.authtoken.models import Token
 from rest_framework.permissions import AllowAny, IsAuthenticated
 
+from django.db.models.functions import Coalesce
+from django.db.models import Count, Q, F, Sum
 from django.db import models 
 
 # Local/App Imports
 from .permissions import IsAdminUser, IsAdminOrReadOnlySelf # ⭐️ Merge permissions
 from .models import (
+    User,
+    StudentProfile,
     Program, 
     ProgramApplication, 
-    StudentProfile # ⭐️ Add StudentProfile model import
+    ProgramSubmissions
 )
 from .serializers import (
     LoginSerializer, 
@@ -190,3 +194,37 @@ class StudentProfileViewSet(viewsets.ModelViewSet):
         else:
             # Student can only see their own profile (which should be a list of one)
             return StudentProfile.objects.filter(user=user).select_related('user')
+        
+
+# ---------------------------
+# STUDENT PROGRESS SUMMARY VIEW
+# ---------------------------
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def student_progress_summary(request):
+    """
+    Fetches the StudentProfile data (including hours_completed and total_required_hours) 
+    for the currently authenticated user.
+    """
+    user = request.user
+    
+    # 1. Access the StudentProfile via the one-to-one relationship
+    try:
+        student_profile = user.student_profile
+    except StudentProfile.DoesNotExist:
+        return Response(
+            {"detail": "Student profile not found for this user."}, 
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+    # 2. Use the existing StudentProfileDetailSerializer to serialize the data
+    # We only need the fields related to hours for the dashboard summary.
+    # The serializer already has 'hours_completed' and 'total_required_hours'.
+    serializer = StudentProfileDetailSerializer(student_profile)
+    
+    # The serializer output will contain the full profile, but the client 
+    # (your React Native app) only needs to consume the relevant fields:
+    # 'hours_completed' and 'total_required_hours'.
+    return Response(serializer.data, status=status.HTTP_200_OK)
+
+
