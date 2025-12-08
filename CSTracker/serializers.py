@@ -117,8 +117,6 @@ class ProgramSerializer(serializers.ModelSerializer):
         return obj.slots - obj.slots_taken
 
 
-
-
 # ---------------------------
 # PROGRAM APPLICATION SERIALIZER
 # ---------------------------
@@ -194,7 +192,7 @@ class ProgramDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = Program
         # Include necessary display fields for the student's history
-        fields = ('id', 'name', 'location', 'date', 'time_start', 'time_end', 'hours')
+        fields = ('id', 'name', 'location', 'date', 'time_start', 'time_end', 'hours', 'facilitator')
 
 # CSTracker/serializers.py (Add this section)
 
@@ -212,7 +210,8 @@ class ServiceHistorySerializer(serializers.ModelSerializer):
     
     # 1. Use the SerializerMethodField to dynamically fetch the status
     current_status = serializers.SerializerMethodField()
-    
+    student_full_name = serializers.SerializerMethodField()
+
     class Meta:
         model = ProgramApplication
         # 2. Correct the 'fields' list: 
@@ -221,12 +220,19 @@ class ServiceHistorySerializer(serializers.ModelSerializer):
         fields = [
             'id', 
             'program', 
+            'current_status', 
+            'submitted_at',
             'emergency_contact_name',
             'emergency_contact_phone',
-            'current_status', # <-- Use the SerializerMethodField name
-            'submitted_at',
+            'student_full_name',
         ]
         read_only_fields = fields
+
+    def get_student_full_name(self, obj):
+        # obj is the ProgramApplication instance
+        # Access the related student profile and then the user object
+        user = obj.student.user
+        return f"{user.first_name} {user.last_name}" if user.first_name and user.last_name else user.username
 
     # 3. Define the method to fetch the latest status
     def get_current_status(self, obj):
@@ -269,3 +275,37 @@ class StudentProfileDetailSerializer(serializers.ModelSerializer):
             'phone_number', 'total_required_hours', 'hours_completed' 
         ]
         read_only_fields = ['hours_completed', 'total_required_hours']
+
+# ---------------------------
+# PROGRAM SUBMISSIONS SERIALIZER
+# ---------------------------
+class ProgramSubmissionsSerializer(serializers.ModelSerializer):
+    # Keep your existing methods/fields
+    student_name = serializers.SerializerMethodField()
+    course_section = serializers.SerializerMethodField()
+    
+    # Fix emergency contact fields
+    emergency_contact_name = serializers.CharField(source='application.emergency_contact_name', read_only=True)
+    emergency_contact_phone = serializers.CharField(source='application.emergency_contact_phone', read_only=True)
+
+    class Meta:
+        model = ProgramSubmissions
+        fields = [
+            'id', 
+            'status', 
+            'decision_at', 
+            'student_name', 
+            'course_section', 
+            'emergency_contact_name', 
+            'emergency_contact_phone'
+        ]
+
+    def get_student_name(self, obj):
+        # obj is a ProgramSubmissions instance
+        # Get full name from ProgramApplication -> StudentProfile -> User
+        user = obj.application.student.user
+        return f"{user.first_name} {user.last_name}" if user.first_name and user.last_name else user.username
+
+    def get_course_section(self, obj):
+        # Keep your CYS field from StudentProfile
+        return obj.application.student.CYS

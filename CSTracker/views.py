@@ -1,17 +1,15 @@
-# views.py (START OF FILE)
 
 from rest_framework import status, viewsets, permissions
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.authtoken.models import Token
 from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.decorators import action
 
-from django.db.models.functions import Coalesce
-from django.db.models import Count, Q, F, Sum
 from django.db import models 
 
 # Local/App Imports
-from .permissions import IsAdminUser, IsAdminOrReadOnlySelf # ⭐️ Merge permissions
+from .permissions import IsAdminUser, IsAdminOrReadOnlySelf
 from .models import (
     User,
     StudentProfile,
@@ -25,8 +23,8 @@ from .serializers import (
     ProgramSerializer,
     ProgramApplicationSerializer,
     ServiceHistorySerializer,
-    # ⭐️ Add the detail serializer here (the one that actually exists)
     StudentProfileDetailSerializer, 
+    ProgramSubmissionsSerializer,
 )
 
 
@@ -78,12 +76,7 @@ def student_signup(request):
 # COMMUNITY PROGRAMS VIEW
 # ---------------------------
 class ProgramViewSet(viewsets.ModelViewSet):
-    """
-    Provides CRUD operations for Program model.
-    Read-only for students, Full CRUD for admin users.
-    """
     serializer_class = ProgramSerializer
-    # Applies IsAuthenticated universally, and IsAdminUser for POST/PUT/DELETE
     permission_classes = [IsAuthenticated, IsAdminUser] 
 
     def get_queryset(self):
@@ -92,11 +85,8 @@ class ProgramViewSet(viewsets.ModelViewSet):
         """
         user = self.request.user
         if user.is_admin:
-            # Admin sees all programs
             return Program.objects.all().order_by('date')
         else:
-            # Student sees only programs with remaining slots
-            # This is the logic of your old program_list view
             return Program.objects.filter(slots_taken__lt=models.F('slots')).order_by('date')
 
 # ---------------------------
@@ -108,7 +98,6 @@ def program_apply(request):
     """
     Handles a student submitting an application for a community program.
     """
-    # The `context={'request': request}` is CRITICAL for the serializer to access the authenticated user.
     serializer = ProgramApplicationSerializer(data=request.data, context={'request': request})
     
     if serializer.is_valid():
@@ -127,59 +116,37 @@ def program_apply(request):
              
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-# ---------------------------
-# SERVICE HISTORY VIEW
-# ---------------------------
-# CSTracker/views.py
 
 # ---------------------------
-# SERVICE HISTORY VIEW (IMPLEMENTED)
+# SERVICE HISTORY VIEW
 # ---------------------------
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def service_history(request):
-    """
-    Fetches the list of program applications for the currently authenticated student.
-    """
     user = request.user
     
-    # Check if the user is a student (use 'False' as default for safety)
     if not getattr(user, "is_student", False): 
         return Response({"detail": "Access denied. Only students can view their history."}, 
                         status=status.HTTP_403_FORBIDDEN)
     
-    # Ensure the user has a student_profile to query against
     try:
         student_profile = user.student_profile
     except StudentProfile.DoesNotExist:
         return Response({"detail": "Student profile not found for this user."}, 
                         status=status.HTTP_404_NOT_FOUND)
-
-    # 1. Fetch the applications for the logged-in student.
-    # We use select_related('program') to avoid the N+1 query problem by fetching 
-    # the related Program object in the same query.
+    
     applications = ProgramApplication.objects.filter(
-        student=student_profile # Filter by the StudentProfile instance
+        student=student_profile 
     ).select_related('program').order_by('-submitted_at') 
     
-    # 2. Serialize the data using the new ServiceHistorySerializer.
     serializer = ServiceHistorySerializer(applications, many=True)
     
-    # 3. Return the data.
     return Response(serializer.data, status=status.HTTP_200_OK)
 
 class StudentProfileViewSet(viewsets.ModelViewSet):
-    """
-    Provides CRUD operations for StudentProfile model.
-    List/Create/Delete for Admin. Read/Update for Admin or Owner.
-    """
     queryset = StudentProfile.objects.all()
-    # You need a serializer that includes User fields for display (e.g., first_name, email)
-    # Let's assume you create a StudentProfileDetailSerializer for this, 
-    # as the list view needs to display related User data.
     serializer_class = StudentProfileDetailSerializer 
     
-    # 2. PERMISSION FOR STUDENT PROFILE VIEWSET (Admin or Owner access)
     permission_classes = [IsAuthenticated, IsAdminOrReadOnlySelf]
 
     def get_queryset(self):
@@ -194,37 +161,53 @@ class StudentProfileViewSet(viewsets.ModelViewSet):
         else:
             # Student can only see their own profile (which should be a list of one)
             return StudentProfile.objects.filter(user=user).select_related('user')
+
+
+# ---------------------------
+# SERVICE ACCREDITATION
+# ---------------------------
+class ServiceAccreditationViewSet(viewsets.ModelViewSet):
+    serializer_class = ServiceHistorySerializer 
+    permission_classes = [IsAuthenticated, IsAdminUser] 
+    
+    def get_queryset(self):
+        queryset = ProgramApplication.objects.all().select_related('program', 'student__user')
+        return queryset.order_by('-submitted_at')
+
+
+# ---------------------------
+# PROGRAM SUBMISSIONS VIEW
+# ---------------------------
+class ProgramSubmissionsViewSet(viewsets.ModelViewSet):
+    queryset = ProgramSubmissions.objects.all()
+    serializer_class = ProgramSubmissionsSerializer
+
+    def get_queryset(self):
+        queryset = self.queryset
+        program_id = self.request.query_params.get('program')
+        if program_id is not None:
+            # Filters submissions by the ProgramApplication's program
+            queryset = queryset.filter(application__program__id=program_id)
+        return queryset.order_by('-decision_at')
+
+
+    @action(detail=True, methods=['post'])
+    def update_status(self, request, pk=None):
+        submission = self.get_object()
+        new_status = request.data.get('status')
         
-
-# ---------------------------
-# STUDENT PROGRESS SUMMARY VIEW
-# ---------------------------
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def student_progress_summary(request):
-    """
-    Fetches the StudentProfile data (including hours_completed and total_required_hours) 
-    for the currently authenticated user.
-    """
-    user = request.user
-    
-    # 1. Access the StudentProfile via the one-to-one relationship
-    try:
-        student_profile = user.student_profile
-    except StudentProfile.DoesNotExist:
-        return Response(
-            {"detail": "Student profile not found for this user."}, 
-            status=status.HTTP_404_NOT_FOUND
-        )
-
-    # 2. Use the existing StudentProfileDetailSerializer to serialize the data
-    # We only need the fields related to hours for the dashboard summary.
-    # The serializer already has 'hours_completed' and 'total_required_hours'.
-    serializer = StudentProfileDetailSerializer(student_profile)
-    
-    # The serializer output will contain the full profile, but the client 
-    # (your React Native app) only needs to consume the relevant fields:
-    # 'hours_completed' and 'total_required_hours'.
-    return Response(serializer.data, status=status.HTTP_200_OK)
+        if new_status not in ['approved', 'rejected']:
+            return Response({'error': 'Invalid status provided.'}, status=400)
 
 
+        submission.status = new_status
+        submission.save()
+
+        if new_status == 'approved':
+            program_hours = submission.application.program.hours
+            student_profile = submission.application.student
+            
+            student_profile.hours_completed += program_hours
+            student_profile.save()
+
+        return Response(self.get_serializer(submission).data, status=200)
