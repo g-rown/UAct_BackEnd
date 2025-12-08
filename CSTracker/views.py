@@ -5,6 +5,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.authtoken.models import Token
 from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.decorators import action
 
 from django.db import models 
 
@@ -13,7 +14,8 @@ from .permissions import IsAdminUser, IsAdminOrReadOnlySelf # ⭐️ Merge permi
 from .models import (
     Program, 
     ProgramApplication, 
-    StudentProfile # ⭐️ Add StudentProfile model import
+    StudentProfile, # ⭐️ Add StudentProfile model import
+    ProgramSubmissions,
 )
 from .serializers import (
     LoginSerializer, 
@@ -23,6 +25,7 @@ from .serializers import (
     ServiceHistorySerializer,
     # ⭐️ Add the detail serializer here (the one that actually exists)
     StudentProfileDetailSerializer, 
+    ProgramSubmissionsSerializer,
 )
 
 
@@ -222,3 +225,53 @@ class ServiceAccreditationViewSet(viewsets.ModelViewSet):
     # You would also add a 'perform_update' method here 
     # to handle the approval/rejection logic.
     # e.g., def perform_update(self, serializer): ...
+
+# ---------------------------
+# PROGRAM SUBMISSIONS VIEW
+# ---------------------------
+
+class ProgramSubmissionsViewSet(viewsets.ModelViewSet):
+    queryset = ProgramSubmissions.objects.all()
+    serializer_class = ProgramSubmissionsSerializer
+    # Permission classes (e.g., IsAdminUser) should be set here 
+    # to restrict access to only those who can review submissions.
+
+    def get_queryset(self):
+        """
+        Optionally restricts the returned submissions to a given program ID,
+        which is what your React Native frontend is doing: 
+        `?program=programId`
+        """
+        queryset = self.queryset
+        program_id = self.request.query_params.get('program')
+        if program_id is not None:
+            # Filters submissions by the ProgramApplication's program
+            queryset = queryset.filter(application__program__id=program_id)
+        return queryset.order_by('-decision_at')
+
+
+    # This method corresponds to your frontend's POST request for status updates:
+    # `${API_BASE_URL}/programsubmissions/${submissionId}/update_status/`
+    @action(detail=True, methods=['post'])
+    def update_status(self, request, pk=None):
+        submission = self.get_object()
+        new_status = request.data.get('status')
+        
+        if new_status not in ['approved', 'rejected']:
+            return Response({'error': 'Invalid status provided.'}, status=400)
+
+        # 1. Update the status
+        submission.status = new_status
+        submission.save()
+
+        # 2. (Optional but recommended): Handle hours update if approved
+        if new_status == 'approved':
+            # Get the program's hours and the student profile
+            program_hours = submission.application.program.hours
+            student_profile = submission.application.student
+            
+            # Update hours_completed and save the student profile
+            student_profile.hours_completed += program_hours
+            student_profile.save()
+
+        return Response(self.get_serializer(submission).data, status=200)

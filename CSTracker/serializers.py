@@ -277,3 +277,37 @@ class StudentProfileDetailSerializer(serializers.ModelSerializer):
             'phone_number', 'total_required_hours', 'hours_completed' 
         ]
         read_only_fields = ['hours_completed', 'total_required_hours']
+
+# ---------------------------
+# PROGRAM SUBMISSIONS SERIALIZER
+# ---------------------------
+class ProgramSubmissionsSerializer(serializers.ModelSerializer):
+    # Keep your existing methods/fields
+    student_name = serializers.SerializerMethodField()
+    course_section = serializers.SerializerMethodField()
+    
+    # Fix emergency contact fields
+    emergency_contact_name = serializers.CharField(source='application.emergency_contact_name', read_only=True)
+    emergency_contact_phone = serializers.CharField(source='application.emergency_contact_phone', read_only=True)
+
+    class Meta:
+        model = ProgramSubmissions
+        fields = [
+            'id', 
+            'status', 
+            'decision_at', 
+            'student_name', 
+            'course_section', 
+            'emergency_contact_name', 
+            'emergency_contact_phone'
+        ]
+
+    def get_student_name(self, obj):
+        # obj is a ProgramSubmissions instance
+        # Get full name from ProgramApplication -> StudentProfile -> User
+        user = obj.application.student.user
+        return f"{user.first_name} {user.last_name}" if user.first_name and user.last_name else user.username
+
+    def get_course_section(self, obj):
+        # Keep your CYS field from StudentProfile
+        return obj.application.student.CYS
