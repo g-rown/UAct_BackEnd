@@ -8,12 +8,13 @@ from django.db import models
 
 # Local/App Imports
 from .permissions import IsAdminUser
-from .models import Program
+from .models import Program, ProgramApplication
 from .serializers import (
     LoginSerializer, 
     StudentSignupSerializer, 
     ProgramSerializer,
-    ProgramApplicationSerializer
+    ProgramApplicationSerializer,
+    ServiceHistorySerializer,
 )
 
 
@@ -114,3 +115,43 @@ def program_apply(request):
              
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+# ---------------------------
+# SERVICE HISTORY VIEW
+# ---------------------------
+# CSTracker/views.py
+
+# ---------------------------
+# SERVICE HISTORY VIEW (IMPLEMENTED)
+# ---------------------------
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def service_history(request):
+    """
+    Fetches the list of program applications for the currently authenticated student.
+    """
+    user = request.user
+    
+    # Check if the user is a student (use 'False' as default for safety)
+    if not getattr(user, "is_student", False): 
+        return Response({"detail": "Access denied. Only students can view their history."}, 
+                        status=status.HTTP_403_FORBIDDEN)
+    
+    # Ensure the user has a student_profile to query against
+    try:
+        student_profile = user.student_profile
+    except StudentProfile.DoesNotExist:
+        return Response({"detail": "Student profile not found for this user."}, 
+                        status=status.HTTP_404_NOT_FOUND)
+
+    # 1. Fetch the applications for the logged-in student.
+    # We use select_related('program') to avoid the N+1 query problem by fetching 
+    # the related Program object in the same query.
+    applications = ProgramApplication.objects.filter(
+        student=student_profile # Filter by the StudentProfile instance
+    ).select_related('program').order_by('-submitted_at') 
+    
+    # 2. Serialize the data using the new ServiceHistorySerializer.
+    serializer = ServiceHistorySerializer(applications, many=True)
+    
+    # 3. Return the data.
+    return Response(serializer.data, status=status.HTTP_200_OK)

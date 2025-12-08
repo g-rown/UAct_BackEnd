@@ -5,8 +5,7 @@ from django.contrib.auth.hashers import make_password
 
 from django.db import models
 
-
-from .models import User, StudentProfile, Program, ProgramApplication
+from .models import User, StudentProfile, Program, ProgramApplication, ProgramSubmissions
 
 
 # ---------------------------
@@ -185,5 +184,64 @@ class ProgramApplicationSerializer(serializers.ModelSerializer):
        
         return application
 
+# CSTracker/serializers.py (Add this section)
 
+# ---------------------------
+# NESTED PROGRAM DETAIL SERIALIZER
+# ---------------------------
+class ProgramDetailSerializer(serializers.ModelSerializer):
+    """Serializer for nested program details."""
+    class Meta:
+        model = Program
+        # Include necessary display fields for the student's history
+        fields = ('id', 'name', 'location', 'date', 'time_start', 'time_end', 'hours')
 
+# CSTracker/serializers.py (Add this section)
+
+# ---------------------------
+# SERVICE HISTORY SERIALIZER
+# ---------------------------
+class ServiceHistorySerializer(serializers.ModelSerializer):
+    """
+    Serializer to display a student's service application history.
+    It fetches the status from the latest related ProgramSubmissions record.
+    """
+    
+    # Use the nested serializer for the 'program' field
+    program = ProgramDetailSerializer(read_only=True)
+    
+    # 1. Use the SerializerMethodField to dynamically fetch the status
+    current_status = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = ProgramApplication
+        # 2. Correct the 'fields' list: 
+        #    - Remove 'status' (the non-existent field)
+        #    - Add 'current_status' (the new SerializerMethodField)
+        fields = [
+            'id', 
+            'program', 
+            'emergency_contact_name',
+            'emergency_contact_phone',
+            'current_status', # <-- Use the SerializerMethodField name
+            'submitted_at',
+        ]
+        read_only_fields = fields
+
+    # 3. Define the method to fetch the latest status
+    def get_current_status(self, obj):
+        """
+        Retrieves the status from the LATEST related ProgramSubmissions object.
+        """
+        # Note: 'submissions' is the related_name from the ProgramSubmissions model
+        # obj is the ProgramApplication instance
+        
+        # We order by decision_at descending to get the most recent submission.
+        latest_submission = obj.submissions.order_by('-decision_at').first()
+        
+        if latest_submission:
+            # Returns the status (e.g., "approved", "pending")
+            return latest_submission.status
+        
+        # Fallback if no submission record exists for this application
+        return 'UNKNOWN'
