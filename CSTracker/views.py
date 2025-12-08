@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from rest_framework.authtoken.models import Token
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.decorators import action
+from rest_framework import mixins
 
 from django.db import models 
 
@@ -14,7 +15,8 @@ from .models import (
     StudentProfile,
     Program, 
     ProgramApplication, 
-    ProgramSubmissions
+    ProgramSubmissions,
+    ServiceLog,
 )
 from .serializers import (
     LoginSerializer, 
@@ -24,6 +26,7 @@ from .serializers import (
     ServiceHistorySerializer,
     StudentProfileDetailSerializer, 
     ProgramSubmissionsSerializer,
+    ServiceLogAccreditationSerializer,
 )
 
 
@@ -163,23 +166,53 @@ class StudentProfileViewSet(viewsets.ModelViewSet):
 
 
 # ---------------------------
-# SERVICE ACCREDITATION
+# SERVICE ACCREDITATION (MODIFIED)
 # ---------------------------
-class ServiceAccreditationViewSet(viewsets.ModelViewSet):
-    serializer_class = ServiceHistorySerializer 
-    permission_classes = [IsAuthenticated, IsAdminUser] 
+# Using ListModelMixin and RetrieveModelMixin for GET, and UpdateModelMixin for PATCH/PUT
+class ServiceAccreditationViewSet(mixins.ListModelMixin,
+                                 mixins.RetrieveModelMixin,
+                                 mixins.UpdateModelMixin,
+                                 viewsets.GenericViewSet):
+    
+    # Change queryset to ServiceLog
+    queryset = ServiceLog.objects.all().select_related(
+        'application__program', 
+        'application__student__user'
+    )
+    # Change serializer to the new one
+    serializer_class = ServiceLogAccreditationSerializer 
+    permission_classes = [IsAuthenticated, IsAdminUser]  
     
     def get_queryset(self):
-        queryset = ProgramApplication.objects.all().select_related('program', 'student__user')
-        return queryset.order_by('-submitted_at')
+        # Orders logs by submission date of the application
+        return self.queryset.order_by('-application__submitted_at')
 
+    # Endpoint for the admin to approve the log
+    @action(detail=True, methods=['post'])
+    def approve(self, request, pk=None):
+        log = self.get_object()
+        
+        # Check if already approved 
+        if log.approved:
+             return Response({'detail': 'Service log already approved.'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # 1. Update the approval status
+        # The signal (post_save on ServiceLog) will automatically credit student hours
+        log.approved = True
+        log.save(update_fields=['approved'])
+        
+        # 2. Return the updated log data
+        # Refresh the instance to get the new status (set by the signal)
+        log.refresh_from_db() 
+        return Response(self.get_serializer(log).data, status=status.HTTP_200_OK)
 
 # ---------------------------
-# PROGRAM SUBMISSIONS VIEW
+# PROGRAM SUBMISSIONS VIEW (MODIFIED - REMOVE HOURS LOGIC)
 # ---------------------------
 class ProgramSubmissionsViewSet(viewsets.ModelViewSet):
     queryset = ProgramSubmissions.objects.all()
     serializer_class = ProgramSubmissionsSerializer
+    permission_classes = [IsAuthenticated, IsAdminUser] # Ensure only admin can modify
 
     def get_queryset(self):
         queryset = self.queryset
@@ -196,20 +229,17 @@ class ProgramSubmissionsViewSet(viewsets.ModelViewSet):
         new_status = request.data.get('status')
         
         if new_status not in ['approved', 'rejected']:
-            return Response({'error': 'Invalid status provided.'}, status=400)
+            return Response({'error': 'Invalid status provided.'}, status=status.HTTP_400_BAD_REQUEST)
 
 
+        # If status is changing, save it. The signal will handle slot management.
         submission.status = new_status
         submission.save()
 
-        if new_status == 'approved':
-            program_hours = submission.application.program.hours
-            student_profile = submission.application.student
-            
-            student_profile.hours_completed += program_hours
-            student_profile.save()
-
-        return Response(self.get_serializer(submission).data, status=200)
+        # REMOVED: The logic for updating student_profile.hours_completed 
+        # This is now correctly handled by the ServiceLog signal when log.approved = True.
+        
+        return Response(self.get_serializer(submission).data, status=status.HTTP_200_OK)
 
 # ---------------------------
 # STUDENT PROGRESS SUMMARY VIEW

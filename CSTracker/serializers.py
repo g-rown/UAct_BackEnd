@@ -1,11 +1,17 @@
 from rest_framework import serializers
 from django.contrib.auth import authenticate
 from django.contrib.auth.hashers import make_password
-
-
 from django.db import models
 
-from .models import User, StudentProfile, Program, ProgramApplication, ProgramSubmissions
+from .models import (
+    User, 
+    StudentProfile, 
+    Program, 
+    ProgramApplication, 
+    ProgramSubmissions, 
+    # NEW: Import ServiceLog
+    ServiceLog
+)
 
 
 # ---------------------------
@@ -163,23 +169,21 @@ class ProgramApplicationSerializer(serializers.ModelSerializer):
         # 1. Get the authenticated student profile
         user = self.context['request'].user
         student_profile = user.student_profile
-           
+            
         # 2. Get the program object using the validated ID
         program_id = validated_data.pop('program_id')
         program = Program.objects.get(pk=program_id)
-       
+        
         # 3. Create the ProgramApplication instance
         application = ProgramApplication.objects.create(
             student=student_profile,
             program=program,
             **validated_data
         )
-       
-        # 4. Atomically increment the slots_taken count on the Program model
-        program.slots_taken = models.F('slots_taken') + 1
-        program.save(update_fields=['slots_taken'])
-        program.refresh_from_db() # Refresh the instance to show the updated value
-       
+        
+        # 4. REMOVED: Atomically increment the slots_taken count on the Program model.
+        #    This is now handled ONLY in signals.py upon admin approval.
+        
         return application
 
 # CSTracker/serializers.py (Add this section)
@@ -195,6 +199,47 @@ class ProgramDetailSerializer(serializers.ModelSerializer):
         fields = ('id', 'name', 'location', 'date', 'time_start', 'time_end', 'hours', 'facilitator')
 
 # CSTracker/serializers.py (Add this section)
+
+# ---------------------------
+# SERVICE LOG ACCREDITATION SERIALIZER (NEW)
+# ---------------------------
+class ServiceLogAccreditationSerializer(serializers.ModelSerializer):
+    """
+    Serializer to display ServiceLog details for admin accreditation.
+    """
+    # Nested Program details via ProgramApplication
+    program = ProgramDetailSerializer(source='application.program', read_only=True)
+    
+    # Nested Student name and CYS via ProgramApplication
+    student_full_name = serializers.SerializerMethodField()
+    course_section = serializers.SerializerMethodField()
+    
+    # Emergency contacts are also needed for admin review
+    emergency_contact_name = serializers.CharField(source='application.emergency_contact_name', read_only=True)
+    emergency_contact_phone = serializers.CharField(source='application.emergency_contact_phone', read_only=True)
+
+    class Meta:
+        model = ServiceLog
+        fields = [
+            'id', 
+            'status',       # The date-based status (pending/ongoing/completed)
+            'approved',     # The admin-controlled approval checkbox
+            'program',
+            'student_full_name',
+            'course_section',
+            'emergency_contact_name',
+            'emergency_contact_phone',
+        ]
+        read_only_fields = [f for f in fields if f not in ('approved',)]
+
+    def get_student_full_name(self, obj):
+        # obj is the ServiceLog instance -> application -> student -> user
+        user = obj.application.student.user
+        return user.full_name # Uses the @property from the User model
+
+    def get_course_section(self, obj):
+        # obj is the ServiceLog instance -> application -> student
+        return obj.application.student.CYS # Uses the @property from the StudentProfile model
 
 # ---------------------------
 # SERVICE HISTORY SERIALIZER

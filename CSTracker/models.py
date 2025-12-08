@@ -5,7 +5,7 @@ from datetime import time
 
 
 # ---------------------------
-#         USER MODEL
+#       USER MODEL
 # ---------------------------
 class User(AbstractUser):
     first_name = models.CharField(max_length=30)
@@ -82,7 +82,7 @@ class Program(models.Model):
         return f"{self.name} - {self.slots_remaining} slots left"
 
 # ---------------------------
-#     PROGRAM APPLICATION
+# PROGRAM APPLICATION
 # ---------------------------
 # This is the detailed application form.
 class ProgramApplication(models.Model):
@@ -104,7 +104,7 @@ class ProgramApplication(models.Model):
         return f"{self.student.user.full_name} - {self.program.name}"
 
 # ---------------------------
-#    PROGRAM SUBMISSION
+# PROGRAM SUBMISSION
 # ---------------------------
 class ProgramSubmissions(models.Model):
     PENDING = "pending"
@@ -152,11 +152,26 @@ class ServiceLog(models.Model):
         default=STATUS_PENDING
     )
 
+    # The admin manually approves the hours, NOT upon submission approval
     approved = models.BooleanField(default=False)
+    
+    # --- ADDED HELPER METHOD ---
+    def get_program_status(self):
+        """
+        Determines the status (Pending, Ongoing, Completed) based on the program date.
+        
+        Note: This is the date-based status, separate from final 'approved' status.
+        """
+        program_date = self.application.program.date
+        # Use timezone.localdate() for comparison
+        today = timezone.localdate()
+        
+        if program_date > today:
+            return ServiceLog.STATUS_PENDING  # Program is in the future
+        elif program_date == today:
+            return ServiceLog.STATUS_ONGOING # Program is today
+        else: # program_date < today
+            return ServiceLog.STATUS_COMPLETED # Program is in the past
 
     def __str__(self):
         return f"{self.application.student.user.username} - {self.application.program.hours} hours - {self.status}"
-
-
-
-
