@@ -10,6 +10,7 @@ router.register(
     views.ServiceAccreditationViewSet, 
     basename='accreditation'
 )
+router.register(r'programsubmissions', views.ProgramSubmissionsViewSet, basename='programsubmissions')
 
 urlpatterns = [
    
