@@ -245,3 +245,27 @@ class ServiceHistorySerializer(serializers.ModelSerializer):
         
         # Fallback if no submission record exists for this application
         return 'UNKNOWN'
+
+# ---------------------------
+# NESTED USER SERIALIZER
+# ---------------------------
+class UserForStudentProfileSerializer(serializers.ModelSerializer):
+    """Used for nesting User fields inside StudentProfile."""
+    class Meta:
+        model = User
+        fields = ['id', 'username', 'first_name', 'last_name', 'email']
+
+# ---------------------------
+# STUDENT PROFILE DETAIL SERIALIZER (For Admin/Owner READ/WRITE)
+# ---------------------------
+class StudentProfileDetailSerializer(serializers.ModelSerializer):
+    # This field links to the User model using the reverse relationship defined in your models
+    user = UserForStudentProfileSerializer(read_only=True)
+    
+    class Meta:
+        model = StudentProfile
+        fields = [
+            'id', 'user', 'course', 'year_level', 'section', 
+            'phone_number', 'total_required_hours', 'hours_completed' 
+        ]
+        read_only_fields = ['hours_completed', 'total_required_hours']

@@ -1,3 +1,5 @@
+# views.py (START OF FILE)
+
 from rest_framework import status, viewsets, permissions
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
@@ -7,14 +9,20 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from django.db import models 
 
 # Local/App Imports
-from .permissions import IsAdminUser
-from .models import Program, ProgramApplication
+from .permissions import IsAdminUser, IsAdminOrReadOnlySelf # ⭐️ Merge permissions
+from .models import (
+    Program, 
+    ProgramApplication, 
+    StudentProfile # ⭐️ Add StudentProfile model import
+)
 from .serializers import (
     LoginSerializer, 
     StudentSignupSerializer, 
     ProgramSerializer,
     ProgramApplicationSerializer,
     ServiceHistorySerializer,
+    # ⭐️ Add the detail serializer here (the one that actually exists)
+    StudentProfileDetailSerializer, 
 )
 
 
@@ -155,3 +163,30 @@ def service_history(request):
     
     # 3. Return the data.
     return Response(serializer.data, status=status.HTTP_200_OK)
+
+class StudentProfileViewSet(viewsets.ModelViewSet):
+    """
+    Provides CRUD operations for StudentProfile model.
+    List/Create/Delete for Admin. Read/Update for Admin or Owner.
+    """
+    queryset = StudentProfile.objects.all()
+    # You need a serializer that includes User fields for display (e.g., first_name, email)
+    # Let's assume you create a StudentProfileDetailSerializer for this, 
+    # as the list view needs to display related User data.
+    serializer_class = StudentProfileDetailSerializer 
+    
+    # 2. PERMISSION FOR STUDENT PROFILE VIEWSET (Admin or Owner access)
+    permission_classes = [IsAuthenticated, IsAdminOrReadOnlySelf]
+
+    def get_queryset(self):
+        """
+        Admins can see all students. Students can only see their own profile.
+        """
+        user = self.request.user
+        if user.is_admin:
+            # Admin sees all student profiles
+            # Use select_related to fetch the related User object in one query
+            return StudentProfile.objects.all().select_related('user')
+        else:
+            # Student can only see their own profile (which should be a list of one)
+            return StudentProfile.objects.filter(user=user).select_related('user')
