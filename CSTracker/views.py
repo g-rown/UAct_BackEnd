@@ -1,4 +1,3 @@
-
 from rest_framework import status, viewsets, permissions
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
@@ -211,3 +210,26 @@ class ProgramSubmissionsViewSet(viewsets.ModelViewSet):
             student_profile.save()
 
         return Response(self.get_serializer(submission).data, status=200)
+
+# ---------------------------
+# STUDENT PROGRESS SUMMARY VIEW
+# ---------------------------
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def student_progress_summary(request):
+    
+    user = request.user
+   
+    try:
+        student_profile = user.student_profile
+    except StudentProfile.DoesNotExist:
+        return Response(
+            {"detail": "Student profile not found for this user."},
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+    serializer = StudentProfileDetailSerializer(student_profile)
+   
+    return Response(serializer.data, status=status.HTTP_200_OK)
+
+
