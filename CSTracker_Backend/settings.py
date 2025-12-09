@@ -138,3 +138,7 @@ REST_FRAMEWORK = {
         'rest_framework.permissions.IsAuthenticatedOrReadOnly',
     )
 }
+
+CSRF_TRUSTED_ORIGINS = [
+    'https://uact-backend.onrender.com/'
+]
