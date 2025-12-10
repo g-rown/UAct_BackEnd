@@ -12,7 +12,7 @@
   **Snack Expo:** https://snack.expo.dev/@glennpena/github.com-glennpena-uact_frontend?platform=web 
 
   Group Members:
-  *Gulles, Ronian E.
-  *Ochoa, Pauline Bernadette S.
-  *Peña, Glenn P.
-  *Pineda, Sophia M.
+  - Gulles, Ronian E.
+  - Ochoa, Pauline Bernadette S.
+  - Peña, Glenn P.
+  - Pineda, Sophia M.
